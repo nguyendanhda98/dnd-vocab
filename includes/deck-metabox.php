@@ -22,6 +22,16 @@ function dnd_vocab_register_deck_metaboxes() {
         'side',
         'default'
     );
+
+    // Vocabulary items for this deck.
+    add_meta_box(
+        'dnd_vocab_deck_vocab_metabox',
+        __( 'Vocabulary Items', 'dnd-vocab' ),
+        'dnd_vocab_deck_vocab_metabox_callback',
+        'dnd_deck',
+        'normal',
+        'default'
+    );
 }
 add_action( 'add_meta_boxes', 'dnd_vocab_register_deck_metaboxes' );
 
@@ -162,6 +172,85 @@ function dnd_vocab_save_deck_tags( $post_id ) {
 add_action( 'save_post', 'dnd_vocab_save_deck_tags' );
 
 /**
+ * Render vocabulary items list for a deck in the Deck edit screen.
+ *
+ * @param WP_Post $post Current deck post.
+ */
+function dnd_vocab_deck_vocab_metabox_callback( $post ) {
+    // Query vocabulary items linked to this deck.
+    $items = get_posts(
+        array(
+            'post_type'      => 'dnd_vocab_item',
+            'post_status'    => 'any',
+            'meta_key'       => '_dnd_vocab_deck_id',
+            'meta_value'     => $post->ID,
+            'orderby'        => 'title',
+            'order'          => 'ASC',
+            'posts_per_page' => -1,
+        )
+    );
+
+    $add_url    = admin_url( 'post-new.php?post_type=dnd_vocab_item&deck_id=' . $post->ID );
+    $import_url = admin_url( 'admin.php?page=dnd-vocab-deck-import&deck_id=' . $post->ID );
+    ?>
+    <p>
+        <a href="<?php echo esc_url( $add_url ); ?>" class="button button-primary">
+            <?php esc_html_e( 'Add New Vocabulary Item', 'dnd-vocab' ); ?>
+        </a>
+        <a href="<?php echo esc_url( $import_url ); ?>" class="button">
+            <?php esc_html_e( 'Import from File', 'dnd-vocab' ); ?>
+        </a>
+    </p>
+
+    <?php if ( ! empty( $items ) ) : ?>
+        <table class="widefat fixed striped">
+            <thead>
+                <tr>
+                    <th><?php esc_html_e( 'Word', 'dnd-vocab' ); ?></th>
+                    <th><?php esc_html_e( 'IPA', 'dnd-vocab' ); ?></th>
+                    <th><?php esc_html_e( 'Short Vietnamese', 'dnd-vocab' ); ?></th>
+                    <th><?php esc_html_e( 'Actions', 'dnd-vocab' ); ?></th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ( $items as $item ) : ?>
+                    <?php
+                    $ipa      = get_post_meta( $item->ID, 'dnd_vocab_ipa', true );
+                    $short_vi = get_post_meta( $item->ID, 'dnd_vocab_short_vietnamese', true );
+                    $edit_url = get_edit_post_link( $item->ID );
+                    $delete_url = wp_nonce_url(
+                        add_query_arg(
+                            array(
+                                'action'  => 'dnd_vocab_delete_item',
+                                'item_id' => $item->ID,
+                                'deck_id' => $post->ID,
+                            ),
+                            admin_url( 'admin.php?page=dnd-vocab-deck-items' )
+                        ),
+                        'dnd_vocab_delete_item_' . $item->ID
+                    );
+                    ?>
+                    <tr>
+                        <td><strong><?php echo esc_html( get_the_title( $item ) ); ?></strong></td>
+                        <td><?php echo esc_html( $ipa ); ?></td>
+                        <td><?php echo esc_html( $short_vi ); ?></td>
+                        <td>
+                            <a href="<?php echo esc_url( $edit_url ); ?>"><?php esc_html_e( 'Edit', 'dnd-vocab' ); ?></a> |
+                            <a href="<?php echo esc_url( $delete_url ); ?>" onclick="return confirm('<?php echo esc_js( __( 'Delete this vocabulary item?', 'dnd-vocab' ) ); ?>');">
+                                <?php esc_html_e( 'Delete', 'dnd-vocab' ); ?>
+                            </a>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+    <?php else : ?>
+        <p><?php esc_html_e( 'No vocabulary items yet. Click \"Add New Vocabulary Item\" to create one.', 'dnd-vocab' ); ?></p>
+    <?php endif; ?>
+    <?php
+}
+
+/**
  * Add custom column to Deck list table
  *
  * @param array $columns The existing columns.
@@ -169,16 +258,17 @@ add_action( 'save_post', 'dnd_vocab_save_deck_tags' );
  */
 function dnd_vocab_deck_columns( $columns ) {
     $new_columns = array();
-    
+
     foreach ( $columns as $key => $value ) {
         $new_columns[ $key ] = $value;
-        
-        // Add Tags column after title
+
+        // Add Tags column after title.
         if ( 'title' === $key ) {
-            $new_columns['dnd_tags'] = __( 'Tags', 'dnd-vocab' );
+            $new_columns['dnd_tags']  = __( 'Tags', 'dnd-vocab' );
+            $new_columns['dnd_vocab'] = __( 'Vocabulary', 'dnd-vocab' );
         }
     }
-    
+
     return $new_columns;
 }
 add_filter( 'manage_dnd_deck_posts_columns', 'dnd_vocab_deck_columns' );
@@ -199,6 +289,36 @@ function dnd_vocab_deck_column_content( $column, $post_id ) {
             echo '<span aria-hidden="true">—</span>';
         }
     }
+
+    if ( 'dnd_vocab' === $column ) {
+        $deck_id = $post_id;
+        $items   = get_posts(
+            array(
+                'post_type'      => 'dnd_vocab_item',
+                'post_status'    => 'any',
+                'meta_key'       => '_dnd_vocab_deck_id',
+                'meta_value'     => $deck_id,
+                'fields'         => 'ids',
+                'nopaging'       => true,
+            )
+        );
+
+        $count = is_array( $items ) ? count( $items ) : 0;
+
+        $url = add_query_arg(
+            array(
+                'page'    => 'dnd-vocab-deck-items',
+                'deck_id' => $deck_id,
+            ),
+            admin_url( 'admin.php' )
+        );
+
+        printf(
+            '<a href="%1$s">%2$d</a>',
+            esc_url( $url ),
+            $count
+        );
+    }
 }
 add_action( 'manage_dnd_deck_posts_custom_column', 'dnd_vocab_deck_column_content', 10, 2 );
 
@@ -209,8 +329,10 @@ add_action( 'manage_dnd_deck_posts_custom_column', 'dnd_vocab_deck_column_conten
  * @return array
  */
 function dnd_vocab_deck_sortable_columns( $columns ) {
-    $columns['dnd_tags'] = 'dnd_tags';
+    $columns['dnd_tags']  = 'dnd_tags';
+    $columns['dnd_vocab'] = 'dnd_vocab';
     return $columns;
 }
 add_filter( 'manage_edit-dnd_deck_sortable_columns', 'dnd_vocab_deck_sortable_columns' );
+
 

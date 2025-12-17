@@ -11,10 +11,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * Register the Deck custom post type
+ * Register the custom post types
  */
 function dnd_vocab_register_post_types() {
-    $labels = array(
+    // Deck CPT.
+    $deck_labels = array(
         'name'                  => _x( 'Decks', 'Post type general name', 'dnd-vocab' ),
         'singular_name'         => _x( 'Deck', 'Post type singular name', 'dnd-vocab' ),
         'menu_name'             => _x( 'Decks', 'Admin Menu text', 'dnd-vocab' ),
@@ -41,8 +42,8 @@ function dnd_vocab_register_post_types() {
         'items_list'            => _x( 'Decks list', 'Screen reader text', 'dnd-vocab' ),
     );
 
-    $args = array(
-        'labels'             => $labels,
+    $deck_args = array(
+        'labels'             => $deck_labels,
         'public'             => false,
         'publicly_queryable' => false,
         'show_ui'            => true,
@@ -57,7 +58,53 @@ function dnd_vocab_register_post_types() {
         'show_in_rest'       => true,
     );
 
-    register_post_type( 'dnd_deck', $args );
+    register_post_type( 'dnd_deck', $deck_args );
+
+    // Vocabulary Item CPT.
+    $vocab_labels = array(
+        'name'                  => _x( 'Vocabulary Items', 'Post type general name', 'dnd-vocab' ),
+        'singular_name'         => _x( 'Vocabulary Item', 'Post type singular name', 'dnd-vocab' ),
+        'menu_name'             => _x( 'Vocabulary', 'Admin Menu text', 'dnd-vocab' ),
+        'name_admin_bar'        => _x( 'Vocabulary Item', 'Add New on Toolbar', 'dnd-vocab' ),
+        'add_new'               => __( 'Add New', 'dnd-vocab' ),
+        'add_new_item'          => __( 'Add New Vocabulary Item', 'dnd-vocab' ),
+        'new_item'              => __( 'New Vocabulary Item', 'dnd-vocab' ),
+        'edit_item'             => __( 'Edit Vocabulary Item', 'dnd-vocab' ),
+        'view_item'             => __( 'View Vocabulary Item', 'dnd-vocab' ),
+        'all_items'             => __( 'All Vocabulary Items', 'dnd-vocab' ),
+        'search_items'          => __( 'Search Vocabulary Items', 'dnd-vocab' ),
+        'parent_item_colon'     => __( 'Parent Vocabulary Items:', 'dnd-vocab' ),
+        'not_found'             => __( 'No vocabulary items found.', 'dnd-vocab' ),
+        'not_found_in_trash'    => __( 'No vocabulary items found in Trash.', 'dnd-vocab' ),
+        'featured_image'        => _x( 'Image', 'Overrides the \"Featured Image\" phrase', 'dnd-vocab' ),
+        'set_featured_image'    => _x( 'Set image', 'Overrides the \"Set featured image\" phrase', 'dnd-vocab' ),
+        'remove_featured_image' => _x( 'Remove image', 'Overrides the \"Remove featured image\" phrase', 'dnd-vocab' ),
+        'use_featured_image'    => _x( 'Use as image', 'Overrides the \"Use as featured image\" phrase', 'dnd-vocab' ),
+        'archives'              => _x( 'Vocabulary archives', 'The post type archive label', 'dnd-vocab' ),
+        'insert_into_item'      => _x( 'Insert into vocabulary item', 'Overrides the \"Insert into post\" phrase', 'dnd-vocab' ),
+        'uploaded_to_this_item' => _x( 'Uploaded to this vocabulary item', 'Overrides the \"Uploaded to this post\" phrase', 'dnd-vocab' ),
+        'filter_items_list'     => _x( 'Filter vocabulary items list', 'Screen reader text', 'dnd-vocab' ),
+        'items_list_navigation' => _x( 'Vocabulary items list navigation', 'Screen reader text', 'dnd-vocab' ),
+        'items_list'            => _x( 'Vocabulary items list', 'Screen reader text', 'dnd-vocab' ),
+    );
+
+    $vocab_args = array(
+        'labels'             => $vocab_labels,
+        'public'             => false,
+        'publicly_queryable' => false,
+        'show_ui'            => true,
+        'show_in_menu'       => false, // Managed via Deck pages / custom links.
+        'query_var'          => true,
+        'rewrite'            => array( 'slug' => 'dnd-vocab-item' ),
+        'capability_type'    => 'post',
+        'has_archive'        => false,
+        'hierarchical'       => false,
+        'menu_position'      => null,
+        'supports'           => array( 'title' ),
+        'show_in_rest'       => true,
+    );
+
+    register_post_type( 'dnd_vocab_item', $vocab_args );
 }
 add_action( 'init', 'dnd_vocab_register_post_types' );
 

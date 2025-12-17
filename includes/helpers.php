@@ -20,6 +20,95 @@ function dnd_vocab_user_can_manage() {
 }
 
 /**
+ * Replace Anki-style cloze deletions (e.g. {{c1::afraid}}) with "_ _ _".
+ *
+ * Supports multiple cloze indices (c1, c2, c3, ...).
+ *
+ * @param string $text Input text.
+ * @return string Text with cloze content removed.
+ */
+function dnd_vocab_strip_cloze( $text ) {
+    if ( empty( $text ) || ! is_string( $text ) ) {
+        return $text;
+    }
+
+    return preg_replace( '/\{\{c\d+::.*?\}\}/u', '_ _ _', $text );
+}
+
+/**
+ * Generate suggestion string from a vocabulary word.
+ *
+ * Rules:
+ * - Always keep first character.
+ * - Always keep last character if length > 1.
+ * - Keep at least one consonant in the middle (more if desired).
+ * - Replace other characters with underscore "_".
+ * - Preserve original casing; suggestion length equals original length.
+ *
+ * @param string $word The original word.
+ * @return string The generated suggestion.
+ */
+function dnd_vocab_generate_suggestion( $word ) {
+    $word = (string) $word;
+
+    // Trim spaces; if empty or 1 char, just return the word itself.
+    $trimmed = trim( $word );
+    $length  = strlen( $trimmed );
+
+    if ( 0 === $length || 1 === $length ) {
+        return $trimmed;
+    }
+
+    // We'll work on a byte basis; for non‑ASCII you may want mb_* functions.
+    $chars = str_split( $trimmed );
+
+    // Positions we must keep.
+    $keep = array_fill( 0, $length, false );
+    $keep[0]           = true;
+    $keep[ $length-1 ] = true;
+
+    // Define vowels set (lowercase for comparison).
+    $vowels = array( 'a', 'e', 'i', 'o', 'u', 'y' );
+
+    $candidate_consonants = array();
+
+    // Collect consonant positions between first and last.
+    for ( $i = 1; $i < $length - 1; $i++ ) {
+        $ch_lower = strtolower( $chars[ $i ] );
+
+        // Only letters are considered; digits/punct will be treated as non-consonant here.
+        if ( ctype_alpha( $ch_lower ) && ! in_array( $ch_lower, $vowels, true ) ) {
+            $candidate_consonants[] = $i;
+        }
+    }
+
+    // Always keep at least one middle consonant if exists.
+    if ( ! empty( $candidate_consonants ) ) {
+        // Take the "middle" consonant for a stable pattern.
+        $middle_index = (int) floor( count( $candidate_consonants ) / 2 );
+        $keep[ $candidate_consonants[ $middle_index ] ] = true;
+
+        // Optionally, keep one more consonant to make it slightly easier for learners.
+        if ( count( $candidate_consonants ) >= 3 ) {
+            $extra_index = 0; // first consonant.
+            $keep[ $candidate_consonants[ $extra_index ] ] = true;
+        }
+    }
+
+    // Build raw suggestion (no spaces).
+    $suggestion = '';
+    for ( $i = 0; $i < $length; $i++ ) {
+        if ( $keep[ $i ] ) {
+            $suggestion .= $chars[ $i ];
+        } else {
+            $suggestion .= '_';
+        }
+    }
+
+    return $suggestion;
+}
+
+/**
  * Get all DND Tags
  *
  * @param array $args Optional. Arguments for get_terms().
@@ -131,4 +220,46 @@ function dnd_vocab_admin_notice( $message, $type = 'success' ) {
     $class = 'notice notice-' . esc_attr( $type ) . ' is-dismissible';
     printf( '<div class="%1$s"><p>%2$s</p></div>', $class, esc_html( $message ) );
 }
+
+/**
+ * Handle delete vocabulary item action from Deck Vocabulary page.
+ */
+function dnd_vocab_handle_delete_item_action() {
+    if ( ! is_admin() ) {
+        return;
+    }
+
+    if ( ! isset( $_GET['action'], $_GET['item_id'] ) || 'dnd_vocab_delete_item' !== $_GET['action'] ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        return;
+    }
+
+    if ( ! current_user_can( 'manage_options' ) ) {
+        return;
+    }
+
+    $item_id = absint( $_GET['item_id'] ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+    $deck_id = isset( $_GET['deck_id'] ) ? absint( $_GET['deck_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+
+    if ( ! isset( $_GET['_wpnonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'dnd_vocab_delete_item_' . $item_id ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        return;
+    }
+
+    if ( $item_id && 'dnd_vocab_item' === get_post_type( $item_id ) ) {
+        wp_trash_post( $item_id );
+    }
+
+    $redirect = add_query_arg(
+        array(
+            'page'              => 'dnd-vocab-deck-items',
+            'deck_id'           => $deck_id,
+            'dnd_vocab_message' => 'deleted',
+        ),
+        admin_url( 'admin.php' )
+    );
+
+    wp_safe_redirect( $redirect );
+    exit;
+}
+add_action( 'admin_init', 'dnd_vocab_handle_delete_item_action' );
+
 
