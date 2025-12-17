@@ -56,7 +56,54 @@ function dnd_vocab_vocab_metabox_callback( $post ) {
         $fields['_deck_id'] = $deck_id_query;
     }
 
+    // Resolve a valid deck to be used for the Back button.
+    $deck_id  = 0;
+    $deck     = null;
+    $back_url = '';
+
+    if ( ! empty( $fields['_deck_id'] ) ) {
+        $deck_id = absint( $fields['_deck_id'] );
+
+        if ( $deck_id > 0 ) {
+            $deck = get_post( $deck_id );
+
+            if ( $deck && 'dnd_deck' === $deck->post_type ) {
+                $back_url = get_edit_post_link( $deck_id );
+
+                if ( ! $back_url ) {
+                    $back_url = add_query_arg(
+                        array(
+                            'post'   => $deck_id,
+                            'action' => 'edit',
+                        ),
+                        admin_url( 'post.php' )
+                    );
+                }
+            } else {
+                $deck_id  = 0;
+                $back_url = '';
+            }
+        }
+    }
+
     ?>
+    <?php if ( $deck_id && $back_url ) : ?>
+        <p class="dnd-vocab-back-to-deck">
+            <a href="<?php echo esc_url( $back_url ); ?>" class="button">
+                <?php esc_html_e( 'Back to Deck', 'dnd-vocab' ); ?>
+            </a>
+            <span class="dnd-vocab-back-to-deck__label">
+                <?php
+                printf(
+                    /* translators: %s: deck title */
+                    esc_html__( 'Current deck: %s', 'dnd-vocab' ),
+                    esc_html( get_the_title( $deck_id ) )
+                );
+                ?>
+            </span>
+        </p>
+    <?php endif; ?>
+
     <table class="form-table dnd-vocab-item-table">
         <tbody>
             <tr>
