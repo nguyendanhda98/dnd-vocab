@@ -34,6 +34,7 @@ function dnd_vocab_init() {
     require_once DND_VOCAB_PLUGIN_DIR . 'includes/settings-page.php';
     require_once DND_VOCAB_PLUGIN_DIR . 'includes/deck-metabox.php';
     require_once DND_VOCAB_PLUGIN_DIR . 'includes/vocab-metabox.php';
+	require_once DND_VOCAB_PLUGIN_DIR . 'includes/shortcodes.php';
 }
 add_action( 'plugins_loaded', 'dnd_vocab_init' );
 
