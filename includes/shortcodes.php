@@ -704,14 +704,20 @@ function dnd_vocab_render_study_shortcode( $atts ) {
 
 	$display_word = $word ? $word : get_the_title( $vocab_post );
 
-	// Prepare next review text for current card, if available.
-	$next_review_text = '';
+	// Prepare next review texts for current card for each rating option, if available.
+	$next_review_options = array();
 
-	if ( function_exists( 'dnd_vocab_srs_get_card_info' ) && function_exists( 'dnd_vocab_human_readable_next_review' ) ) {
-		$card_info = dnd_vocab_srs_get_card_info( $user_id, $current_vocab_id );
+	if ( function_exists( 'dnd_vocab_srs_predict_next_reviews' ) && function_exists( 'dnd_vocab_human_readable_next_review' ) ) {
+		$predictions = dnd_vocab_srs_predict_next_reviews( $user_id, $current_vocab_id, $current_deck_id );
 
-		if ( is_array( $card_info ) && ! empty( $card_info['due'] ) ) {
-			$next_review_text = dnd_vocab_human_readable_next_review( (int) $card_info['due'] );
+		if ( is_array( $predictions ) ) {
+			foreach ( $predictions as $rating => $due_timestamp ) {
+				$text = dnd_vocab_human_readable_next_review( (int) $due_timestamp );
+
+				if ( $text ) {
+					$next_review_options[ (int) $rating ] = $text;
+				}
+			}
 		}
 	}
 
@@ -833,29 +839,45 @@ function dnd_vocab_render_study_shortcode( $atts ) {
 					</button>
 				</form>
 			<?php else : ?>
-				<?php if ( $next_review_text ) : ?>
-					<p class="dnd-vocab-study__next-review">
-						<?php esc_html_e( 'Từ này sẽ xuất hiện lại', 'dnd-vocab' ); ?>
-						<?php echo ' ' . esc_html( $next_review_text ); ?>
-					</p>
-				<?php endif; ?>
-
 				<form method="post" class="dnd-vocab-study__form dnd-vocab_study__form--answer">
 					<?php wp_nonce_field( 'dnd_vocab_study', 'dnd_vocab_study_nonce' ); ?>
 					<input type="hidden" name="dnd_vocab_study_action" value="answer">
 					<input type="hidden" name="dnd_vocab_study_vocab_id" value="<?php echo esc_attr( $current_vocab_id ); ?>">
 					<input type="hidden" name="dnd_vocab_study_deck_id" value="<?php echo esc_attr( $current_deck_id ); ?>">
 
-					<div class="dnd-vocab-study__answer-buttons">
-						<button type="submit" name="dnd_vocab_study_rating" value="0" class="dnd-vocab-study__button dnd-vocab-study__button--again">
-							<?php esc_html_e( '❌ QUÊN', 'dnd-vocab' ); ?>
-						</button>
-						<button type="submit" name="dnd_vocab_study_rating" value="3" class="dnd-vocab-study__button dnd-vocab-study__button--hard">
-							<?php esc_html_e( '🤔 MƠ HỒ', 'dnd-vocab' ); ?>
-						</button>
-						<button type="submit" name="dnd_vocab_study_rating" value="5" class="dnd-vocab-study__button dnd-vocab-study__button--easy">
-							<?php esc_html_e( '✅ NHỚ', 'dnd-vocab' ); ?>
-						</button>
+					<div class="dnd-vocab-study__answer-buttons" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+						<span class="dnd-vocab-study__answer-option dnd-vocab-study__answer-option--again" style="display:flex;flex-direction:column;align-items:center;">
+							<button type="submit" name="dnd_vocab_study_rating" value="0" class="dnd-vocab-study__button dnd-vocab-study__button--again">
+								<?php esc_html_e( '❌ QUÊN', 'dnd-vocab' ); ?>
+							</button>
+							<?php if ( ! empty( $next_review_options[0] ) ) : ?>
+								<div class="dnd-vocab-study__next-review dnd-vocab-study__next-review--again">
+									<?php echo esc_html( $next_review_options[0] ); ?>
+								</div>
+							<?php endif; ?>
+						</span>
+
+						<span class="dnd-vocab-study__answer-option dnd-vocab-study__answer-option--hard" style="display:flex;flex-direction:column;align-items:center;">
+							<button type="submit" name="dnd_vocab_study_rating" value="3" class="dnd-vocab-study__button dnd-vocab-study__button--hard">
+								<?php esc_html_e( '🤔 MƠ HỒ', 'dnd-vocab' ); ?>
+							</button>
+							<?php if ( ! empty( $next_review_options[3] ) ) : ?>
+								<div class="dnd-vocab-study__next-review dnd-vocab-study__next-review--hard">
+									<?php echo esc_html( $next_review_options[3] ); ?>
+								</div>
+							<?php endif; ?>
+						</span>
+
+						<span class="dnd-vocab-study__answer-option dnd-vocab-study__answer-option--easy" style="display:flex;flex-direction:column;align-items:center;">
+							<button type="submit" name="dnd_vocab_study_rating" value="5" class="dnd-vocab-study__button dnd-vocab-study__button--easy">
+								<?php esc_html_e( '✅ NHỚ', 'dnd-vocab' ); ?>
+							</button>
+							<?php if ( ! empty( $next_review_options[5] ) ) : ?>
+								<div class="dnd-vocab-study__next-review dnd-vocab-study__next-review--easy">
+									<?php echo esc_html( $next_review_options[5] ); ?>
+								</div>
+							<?php endif; ?>
+						</span>
 					</div>
 				</form>
 			<?php endif; ?>

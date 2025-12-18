@@ -335,7 +335,99 @@ function dnd_vocab_save_user_srs_data( $user_id, $data ) {
 }
 
 /**
- * Apply spaced-repetition answer for a vocabulary item.
+ * Compute next SRS state for a vocabulary item (pure function, no DB writes).
+ *
+ * This encapsulates the SM-2 style algorithm used for scheduling.
+ *
+ * @param array|null $card    Existing card data or null for a new card.
+ * @param int        $deck_id Deck ID.
+ * @param int        $rating  Quality rating (0–5).
+ * @param int|null   $now     Current timestamp (for testing/prediction). Defaults to current time.
+ *
+ * @return array Updated card array including new interval, ease_factor, due, etc.
+ */
+function dnd_vocab_srs_compute_next_state( $card, $deck_id, $rating, $now = null ) {
+	$deck_id = (int) $deck_id;
+
+	if ( $deck_id <= 0 ) {
+		return is_array( $card ) ? $card : array();
+	}
+
+	if ( null === $now ) {
+		$now = current_time( 'timestamp' );
+	}
+
+	// Normalize/initialize card.
+	if ( isset( $card ) && is_array( $card ) ) {
+		$card = $card;
+	} else {
+		$card = array(
+			'deck_id'     => $deck_id,
+			'interval'    => 1,
+			'repetitions' => 0,
+			'ease_factor' => 2.5,
+			'due'         => $now,
+			'status'      => 'new',
+		);
+	}
+
+	$quality = (int) $rating;
+
+	if ( $quality < 0 ) {
+		$quality = 0;
+	} elseif ( $quality > 5 ) {
+		$quality = 5;
+	}
+
+	$interval    = isset( $card['interval'] ) ? (int) $card['interval'] : 1;
+	$repetitions = isset( $card['repetitions'] ) ? (int) $card['repetitions'] : 0;
+	$ease_factor = isset( $card['ease_factor'] ) ? (float) $card['ease_factor'] : 2.5;
+
+	if ( $quality < 3 ) {
+		// Again / failed.
+		$repetitions = 0;
+		$interval    = 1;
+		$ease_factor -= 0.2;
+
+		if ( $ease_factor < 1.3 ) {
+			$ease_factor = 1.3;
+		}
+
+		$card['status'] = 'learning';
+	} else {
+		// Passed.
+		$repetitions++;
+
+		if ( 1 === $repetitions ) {
+			$interval = 1;
+		} elseif ( 2 === $repetitions ) {
+			$interval = 6;
+		} else {
+			$interval = max( 1, (int) round( $interval * $ease_factor ) );
+		}
+
+		// SM-2 ease factor update.
+		$ease_factor = $ease_factor + ( 0.1 - ( 5 - $quality ) * ( 0.08 + ( 5 - $quality ) * 0.02 ) );
+
+		if ( $ease_factor < 1.3 ) {
+			$ease_factor = 1.3;
+		}
+
+		$card['status'] = 'review';
+	}
+
+	$card['deck_id']     = $deck_id;
+	$card['interval']    = $interval;
+	$card['repetitions'] = $repetitions;
+	$card['ease_factor'] = $ease_factor;
+	$card['last_review'] = $now;
+	$card['due']         = $now + ( $interval * DAY_IN_SECONDS );
+
+	return $card;
+}
+
+/**
+ * Apply spaced-repetition answer for a vocabulary item (persist to user meta & history).
  *
  * @param int $user_id  User ID.
  * @param int $vocab_id Vocabulary item ID.
@@ -351,73 +443,13 @@ function dnd_vocab_srs_apply_answer( $user_id, $vocab_id, $deck_id, $rating ) {
         return;
     }
 
-    $quality = (int) $rating;
-
-    if ( $quality < 0 ) {
-        $quality = 0;
-    } elseif ( $quality > 5 ) {
-        $quality = 5;
-    }
-
     $now  = current_time( 'timestamp' );
     $data = dnd_vocab_get_user_srs_data( $user_id );
 
-    if ( isset( $data[ $vocab_id ] ) && is_array( $data[ $vocab_id ] ) ) {
-        $card = $data[ $vocab_id ];
-    } else {
-        $card = array(
-            'deck_id'      => $deck_id,
-            'interval'     => 1,
-            'repetitions'  => 0,
-            'ease_factor'  => 2.5,
-            'due'          => $now,
-            'status'       => 'new',
-        );
-    }
+    $existing_card = isset( $data[ $vocab_id ] ) && is_array( $data[ $vocab_id ] ) ? $data[ $vocab_id ] : null;
 
-    $interval    = isset( $card['interval'] ) ? (int) $card['interval'] : 1;
-    $repetitions = isset( $card['repetitions'] ) ? (int) $card['repetitions'] : 0;
-    $ease_factor = isset( $card['ease_factor'] ) ? (float) $card['ease_factor'] : 2.5;
-
-    if ( $quality < 3 ) {
-        // Again / failed.
-        $repetitions = 0;
-        $interval    = 1;
-        $ease_factor -= 0.2;
-
-        if ( $ease_factor < 1.3 ) {
-            $ease_factor = 1.3;
-        }
-
-        $card['status'] = 'learning';
-    } else {
-        // Passed.
-        $repetitions++;
-
-        if ( 1 === $repetitions ) {
-            $interval = 1;
-        } elseif ( 2 === $repetitions ) {
-            $interval = 6;
-        } else {
-            $interval = max( 1, (int) round( $interval * $ease_factor ) );
-        }
-
-        // SM-2 ease factor update.
-        $ease_factor = $ease_factor + ( 0.1 - ( 5 - $quality ) * ( 0.08 + ( 5 - $quality ) * 0.02 ) );
-
-        if ( $ease_factor < 1.3 ) {
-            $ease_factor = 1.3;
-        }
-
-        $card['status'] = 'review';
-    }
-
-    $card['deck_id']      = $deck_id;
-    $card['interval']     = $interval;
-    $card['repetitions']  = $repetitions;
-    $card['ease_factor']  = $ease_factor;
-    $card['last_review']  = $now;
-    $card['due']          = $now + ( $interval * DAY_IN_SECONDS );
+    // Reuse core SRS computation.
+    $card = dnd_vocab_srs_compute_next_state( $existing_card, $deck_id, $rating, $now );
 
     $data[ $vocab_id ] = $card;
 
@@ -489,6 +521,46 @@ function dnd_vocab_srs_get_due_items( $user_id, $deck_ids ) {
     asort( $due_items, SORT_NUMERIC );
 
     return array_keys( $due_items );
+}
+
+/**
+ * Predict next review timestamps for a card for different ratings.
+ *
+ * Used to show, on the back side of the card, when it will reappear if
+ * the user chooses QUÊN (0), MƠ HỒ (3) hoặc NHỚ (5).
+ *
+ * @param int $user_id  User ID.
+ * @param int $vocab_id Vocabulary item ID.
+ * @param int $deck_id  Deck ID.
+ *
+ * @return array Array mapping rating => timestamp.
+ */
+function dnd_vocab_srs_predict_next_reviews( $user_id, $vocab_id, $deck_id ) {
+	$user_id  = (int) $user_id;
+	$vocab_id = (int) $vocab_id;
+	$deck_id  = (int) $deck_id;
+
+	if ( $user_id <= 0 || $vocab_id <= 0 || $deck_id <= 0 ) {
+		return array();
+	}
+
+	$data = dnd_vocab_get_user_srs_data( $user_id );
+
+	$card = isset( $data[ $vocab_id ] ) && is_array( $data[ $vocab_id ] ) ? $data[ $vocab_id ] : null;
+
+	$now     = current_time( 'timestamp' );
+	$ratings = array( 0, 3, 5 );
+	$result  = array();
+
+	foreach ( $ratings as $rating ) {
+		$simulated = dnd_vocab_srs_compute_next_state( $card, $deck_id, $rating, $now );
+
+		if ( is_array( $simulated ) && ! empty( $simulated['due'] ) ) {
+			$result[ $rating ] = (int) $simulated['due'];
+		}
+	}
+
+	return $result;
 }
 
 /**
@@ -774,7 +846,7 @@ function dnd_vocab_human_readable_next_review( $timestamp ) {
 		$value = max( 1, $seconds );
 
 		return sprintf(
-			_n( 'sau %d giây', 'sau %d giây', $value, 'dnd-vocab' ),
+			_n( '%d giây', '%d giây', $value, 'dnd-vocab' ),
 			$value
 		);
 	}
@@ -785,7 +857,7 @@ function dnd_vocab_human_readable_next_review( $timestamp ) {
 		$value = max( 1, $minutes );
 
 		return sprintf(
-			_n( 'sau %d phút', 'sau %d phút', $value, 'dnd-vocab' ),
+			_n( '%d phút', '%d phút', $value, 'dnd-vocab' ),
 			$value
 		);
 	}
@@ -796,7 +868,7 @@ function dnd_vocab_human_readable_next_review( $timestamp ) {
 		$value = max( 1, $hours );
 
 		return sprintf(
-			_n( 'sau %d giờ', 'sau %d giờ', $value, 'dnd-vocab' ),
+			_n( '%d giờ', '%d giờ', $value, 'dnd-vocab' ),
 			$value
 		);
 	}
@@ -807,9 +879,40 @@ function dnd_vocab_human_readable_next_review( $timestamp ) {
 		$days = 1;
 	}
 
+	// Dưới 7 ngày: vẫn hiển thị theo ngày.
+	if ( $days < 7 ) {
+		return sprintf(
+			_n( '%d ngày', '%d ngày', $days, 'dnd-vocab' ),
+			$days
+		);
+	}
+
+	// Từ 7 đến dưới 30 ngày: hiển thị theo tuần.
+	if ( $days < 30 ) {
+		$weeks = (int) max( 1, round( $days / 7 ) );
+
+		return sprintf(
+			_n( '%d tuần', '%d tuần', $weeks, 'dnd-vocab' ),
+			$weeks
+		);
+	}
+
+	// Từ 30 đến dưới 365 ngày: hiển thị theo tháng.
+	if ( $days < 365 ) {
+		$months = (int) max( 1, round( $days / 30 ) );
+
+		return sprintf(
+			_n( '%d tháng', '%d tháng', $months, 'dnd-vocab' ),
+			$months
+		);
+	}
+
+	// Từ 1 năm trở lên: hiển thị theo năm.
+	$years = (int) max( 1, round( $days / 365 ) );
+
 	return sprintf(
-		_n( 'sau %d ngày', 'sau %d ngày', $days, 'dnd-vocab' ),
-		$days
+		_n( '%d năm', '%d năm', $years, 'dnd-vocab' ),
+		$years
 	);
 }
 
