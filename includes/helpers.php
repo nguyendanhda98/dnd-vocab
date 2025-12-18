@@ -291,6 +291,30 @@ function dnd_vocab_get_user_srs_data( $user_id ) {
 }
 
 /**
+ * Get SRS card info for a specific vocabulary item of a user.
+ *
+ * @param int $user_id  User ID.
+ * @param int $vocab_id Vocabulary item ID.
+ * @return array|null   Card data array or null if not found.
+ */
+function dnd_vocab_srs_get_card_info( $user_id, $vocab_id ) {
+	$user_id  = (int) $user_id;
+	$vocab_id = (int) $vocab_id;
+
+	if ( $user_id <= 0 || $vocab_id <= 0 ) {
+		return null;
+	}
+
+	$data = dnd_vocab_get_user_srs_data( $user_id );
+
+	if ( isset( $data[ $vocab_id ] ) && is_array( $data[ $vocab_id ] ) ) {
+		return $data[ $vocab_id ];
+	}
+
+	return null;
+}
+
+/**
  * Save SRS data for a user.
  *
  * @param int   $user_id User ID.
@@ -715,6 +739,78 @@ function dnd_vocab_get_heatmap_data( $user_id ) {
     ksort( $heatmap_data );
 
     return $heatmap_data;
+}
+
+/**
+ * Get human-readable relative time until next review from a timestamp.
+ *
+ * Output examples (in Vietnamese):
+ * - "sau 10 giây"
+ * - "sau 5 phút"
+ * - "sau 3 giờ"
+ * - "sau 2 ngày"
+ *
+ * @param int $timestamp Next review timestamp.
+ * @return string
+ */
+function dnd_vocab_human_readable_next_review( $timestamp ) {
+	$timestamp = (int) $timestamp;
+
+	if ( $timestamp <= 0 ) {
+		return '';
+	}
+
+	$now  = current_time( 'timestamp' );
+	$diff = $timestamp - $now;
+
+	// If due time is in the past, treat it as very soon (1 minute).
+	if ( $diff <= 0 ) {
+		$diff = MINUTE_IN_SECONDS;
+	}
+
+	$seconds = (int) $diff;
+
+	if ( $seconds < MINUTE_IN_SECONDS ) {
+		$value = max( 1, $seconds );
+
+		return sprintf(
+			_n( 'sau %d giây', 'sau %d giây', $value, 'dnd-vocab' ),
+			$value
+		);
+	}
+
+	$minutes = (int) floor( $seconds / MINUTE_IN_SECONDS );
+
+	if ( $minutes < 60 ) {
+		$value = max( 1, $minutes );
+
+		return sprintf(
+			_n( 'sau %d phút', 'sau %d phút', $value, 'dnd-vocab' ),
+			$value
+		);
+	}
+
+	$hours = (int) floor( $seconds / HOUR_IN_SECONDS );
+
+	if ( $hours < 24 ) {
+		$value = max( 1, $hours );
+
+		return sprintf(
+			_n( 'sau %d giờ', 'sau %d giờ', $value, 'dnd-vocab' ),
+			$value
+		);
+	}
+
+	$days = (int) floor( $seconds / DAY_IN_SECONDS );
+
+	if ( $days < 1 ) {
+		$days = 1;
+	}
+
+	return sprintf(
+		_n( 'sau %d ngày', 'sau %d ngày', $days, 'dnd-vocab' ),
+		$days
+	);
 }
 
 /**
