@@ -849,3 +849,245 @@ function dnd_vocab_render_study_shortcode( $atts ) {
 }
 add_shortcode( 'dnd_vocab_study', 'dnd_vocab_render_study_shortcode' );
 
+/**
+ * Review heatmap shortcode.
+ *
+ * @param array $atts Shortcode attributes.
+ * @return string
+ */
+function dnd_vocab_render_review_heatmap_shortcode( $atts ) {
+	$atts = shortcode_atts(
+		array(),
+		$atts,
+		'dnd_vocab_review_heatmap'
+	);
+
+	if ( ! is_user_logged_in() ) {
+		return '<p>' . esc_html__( 'Hãy đăng nhập để xem lịch sử ôn tập của bạn.', 'dnd-vocab' ) . '</p>';
+	}
+
+	$user_id = get_current_user_id();
+
+	// Enqueue assets.
+	dnd_vocab_enqueue_heatmap_assets();
+
+	// Get heatmap data.
+	$heatmap_data = array();
+	$streak       = 0;
+
+	if ( function_exists( 'dnd_vocab_get_heatmap_data' ) ) {
+		$heatmap_data = dnd_vocab_get_heatmap_data( $user_id );
+	}
+
+	if ( function_exists( 'dnd_vocab_calculate_streak' ) ) {
+		$streak = dnd_vocab_calculate_streak( $user_id );
+	}
+
+	ob_start();
+	?>
+	<div class="dnd-vocab-heatmap" data-user-id="<?php echo esc_attr( $user_id ); ?>">
+		<div class="dnd-vocab-heatmap__header">
+			<h2 class="dnd-vocab-heatmap__title"><?php esc_html_e( 'Lịch sử ôn tập', 'dnd-vocab' ); ?></h2>
+			<?php if ( $streak > 0 ) : ?>
+				<div class="dnd-vocab-heatmap__streak">
+					<span class="dnd-vocab-heatmap__streak-label"><?php esc_html_e( 'Chuỗi ngày:', 'dnd-vocab' ); ?></span>
+					<span class="dnd-vocab-heatmap__streak-value"><?php echo esc_html( $streak ); ?> <?php esc_html_e( 'ngày', 'dnd-vocab' ); ?></span>
+				</div>
+			<?php endif; ?>
+		</div>
+
+		<div class="dnd-vocab-heatmap__legend">
+			<span class="dnd-vocab-heatmap__legend-label"><?php esc_html_e( 'Ít hơn', 'dnd-vocab' ); ?></span>
+			<div class="dnd-vocab-heatmap__legend-colors">
+				<div class="dnd-vocab-heatmap__legend-item dnd-vocab-heatmap__legend-item--0"></div>
+				<div class="dnd-vocab-heatmap__legend-item dnd-vocab-heatmap__legend-item--1"></div>
+				<div class="dnd-vocab-heatmap__legend-item dnd-vocab-heatmap__legend-item--2"></div>
+				<div class="dnd-vocab-heatmap__legend-item dnd-vocab-heatmap__legend-item--3"></div>
+				<div class="dnd-vocab-heatmap__legend-item dnd-vocab-heatmap__legend-item--4"></div>
+			</div>
+			<span class="dnd-vocab-heatmap__legend-label"><?php esc_html_e( 'Nhiều hơn', 'dnd-vocab' ); ?></span>
+		</div>
+
+		<div class="dnd-vocab-heatmap__container">
+			<div class="dnd-vocab-heatmap__grid">
+				<?php
+				$now   = current_time( 'timestamp' );
+				$today = wp_date( 'Y-m-d', $now );
+				$start_date = wp_date( 'Y-m-d', $now - ( 365 * DAY_IN_SECONDS ) );
+				$end_date   = wp_date( 'Y-m-d', $now + ( 30 * DAY_IN_SECONDS ) );
+
+				$current_date = $start_date;
+				$week_start = true;
+				$week_count = 0;
+
+				while ( $current_date <= $end_date ) {
+					if ( $week_start ) {
+						// Show week label.
+						$week_timestamp = strtotime( $current_date );
+						$week_label = wp_date( 'M j', $week_timestamp );
+						?>
+						<div class="dnd-vocab-heatmap__week-label"><?php echo esc_html( $week_label ); ?></div>
+						<?php
+						$week_start = false;
+					}
+
+					$count = 0;
+					$is_today = ( $current_date === $today );
+					$is_past = ( $current_date < $today );
+					$is_future = ( $current_date > $today );
+
+					if ( isset( $heatmap_data[ $current_date ] ) ) {
+						$count = (int) $heatmap_data[ $current_date ]['total'];
+					}
+
+					// Determine intensity level (0-4).
+					$intensity = 0;
+					if ( $count > 0 ) {
+						if ( $count <= 2 ) {
+							$intensity = 1;
+						} elseif ( $count <= 4 ) {
+							$intensity = 2;
+						} elseif ( $count <= 6 ) {
+							$intensity = 3;
+						} else {
+							$intensity = 4;
+						}
+					}
+
+					$classes = array( 'dnd-vocab-heatmap__day' );
+					$classes[] = 'dnd-vocab-heatmap__day--' . $intensity;
+
+					if ( $is_today ) {
+						$classes[] = 'dnd-vocab-heatmap__day--today';
+					}
+					if ( $is_future ) {
+						$classes[] = 'dnd-vocab-heatmap__day--future';
+					}
+
+					$date_label = wp_date( 'M j, Y', strtotime( $current_date ) );
+					?>
+					<div class="<?php echo esc_attr( implode( ' ', $classes ) ); ?>"
+						 data-date="<?php echo esc_attr( $current_date ); ?>"
+						 data-count="<?php echo esc_attr( $count ); ?>"
+						 title="<?php echo esc_attr( $date_label . ': ' . $count . ' ' . __( 'cards', 'dnd-vocab' ) ); ?>">
+					</div>
+					<?php
+
+					$week_count++;
+					if ( $week_count >= 7 ) {
+						$week_count = 0;
+						$week_start = true;
+					}
+
+				// Increment date safely.
+				$date_obj = date_create( $current_date );
+				if ( $date_obj ) {
+					$date_obj->modify( '+1 day' );
+					$current_date = $date_obj->format( 'Y-m-d' );
+				} else {
+					// Fallback.
+					$current_timestamp = strtotime( $current_date . ' +1 day' );
+					$current_date = wp_date( 'Y-m-d', $current_timestamp );
+				}
+				}
+				?>
+			</div>
+		</div>
+	</div>
+
+	<!-- Modal for showing cards by date -->
+	<div class="dnd-vocab-heatmap__modal" id="dnd-vocab-heatmap-modal">
+		<div class="dnd-vocab-heatmap__modal-overlay"></div>
+		<div class="dnd-vocab-heatmap__modal-content">
+			<div class="dnd-vocab-heatmap__modal-header">
+				<h3 class="dnd-vocab-heatmap__modal-title"></h3>
+				<button class="dnd-vocab-heatmap__modal-close" aria-label="<?php esc_attr_e( 'Đóng', 'dnd-vocab' ); ?>">&times;</button>
+			</div>
+			<div class="dnd-vocab-heatmap__modal-body">
+				<div class="dnd-vocab-heatmap__modal-loading">
+					<?php esc_html_e( 'Đang tải...', 'dnd-vocab' ); ?>
+				</div>
+				<div class="dnd-vocab-heatmap__modal-content-inner" style="display: none;">
+					<div class="dnd-vocab-heatmap__modal-section">
+						<h4 class="dnd-vocab-heatmap__modal-section-title"><?php esc_html_e( 'Đã ôn tập', 'dnd-vocab' ); ?></h4>
+						<ul class="dnd-vocab-heatmap__modal-list dnd-vocab-heatmap__modal-list--reviewed"></ul>
+					</div>
+					<div class="dnd-vocab-heatmap__modal-section">
+						<h4 class="dnd-vocab-heatmap__modal-section-title"><?php esc_html_e( 'Sắp đến hạn', 'dnd-vocab' ); ?></h4>
+						<ul class="dnd-vocab-heatmap__modal-list dnd-vocab-heatmap__modal-list--due"></ul>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+	<?php
+
+	return ob_get_clean();
+}
+add_shortcode( 'dnd_vocab_review_heatmap', 'dnd_vocab_render_review_heatmap_shortcode' );
+
+/**
+ * Enqueue heatmap assets (CSS and JS).
+ */
+function dnd_vocab_enqueue_heatmap_assets() {
+	$plugin_url = DND_VOCAB_PLUGIN_URL;
+	$version     = DND_VOCAB_VERSION;
+
+	wp_enqueue_style(
+		'dnd-vocab-heatmap',
+		$plugin_url . 'assets/css/review-heatmap.css',
+		array(),
+		$version
+	);
+
+	wp_enqueue_script(
+		'dnd-vocab-heatmap',
+		$plugin_url . 'assets/js/review-heatmap.js',
+		array( 'jquery' ),
+		$version,
+		true
+	);
+
+	wp_localize_script(
+		'dnd-vocab-heatmap',
+		'dndVocabHeatmap',
+		array(
+			'ajaxUrl' => admin_url( 'admin-ajax.php' ),
+			'nonce'   => wp_create_nonce( 'dnd_vocab_heatmap_ajax' ),
+			'i18n'    => array(
+				'noCards'     => __( 'Không có cards nào', 'dnd-vocab' ),
+				'loading'     => __( 'Đang tải...', 'dnd-vocab' ),
+				'error'       => __( 'Có lỗi xảy ra', 'dnd-vocab' ),
+				'cards'       => __( 'cards', 'dnd-vocab' ),
+			),
+		)
+	);
+}
+
+/**
+ * AJAX handler for getting cards by date.
+ */
+function dnd_vocab_ajax_get_cards_by_date() {
+	check_ajax_referer( 'dnd_vocab_heatmap_ajax', 'nonce' );
+
+	if ( ! is_user_logged_in() ) {
+		wp_send_json_error( array( 'message' => __( 'Bạn cần đăng nhập', 'dnd-vocab' ) ) );
+	}
+
+	$user_id = get_current_user_id();
+	$date    = isset( $_POST['date'] ) ? sanitize_text_field( wp_unslash( $_POST['date'] ) ) : '';
+
+	if ( empty( $date ) ) {
+		wp_send_json_error( array( 'message' => __( 'Ngày không hợp lệ', 'dnd-vocab' ) ) );
+	}
+
+	if ( ! function_exists( 'dnd_vocab_get_cards_by_date' ) ) {
+		wp_send_json_error( array( 'message' => __( 'Function không tồn tại', 'dnd-vocab' ) ) );
+	}
+
+	$cards = dnd_vocab_get_cards_by_date( $user_id, $date );
+
+	wp_send_json_success( $cards );
+}
+add_action( 'wp_ajax_dnd_vocab_get_cards_by_date', 'dnd_vocab_ajax_get_cards_by_date' );
+

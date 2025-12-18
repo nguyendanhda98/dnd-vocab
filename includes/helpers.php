@@ -398,6 +398,9 @@ function dnd_vocab_srs_apply_answer( $user_id, $vocab_id, $deck_id, $rating ) {
     $data[ $vocab_id ] = $card;
 
     dnd_vocab_save_user_srs_data( $user_id, $data );
+
+    // Log review to history for heatmap.
+    dnd_vocab_log_review( $user_id, $vocab_id, $deck_id, $rating, $card['status'] );
 }
 
 /**
@@ -518,4 +521,357 @@ function dnd_vocab_srs_pick_next_new_item( $user_id, $deck_ids ) {
     }
 
     return (int) $posts[0];
+}
+
+/**
+ * ------------------------------
+ * Review History & Heatmap helpers
+ * ------------------------------
+ */
+
+/**
+ * Log a review to user's review history.
+ *
+ * @param int    $user_id    User ID.
+ * @param int    $vocab_id   Vocabulary item ID.
+ * @param int    $deck_id    Deck ID.
+ * @param int    $rating     Quality rating (0, 3, 5).
+ * @param string $review_type Review type: 'new', 'review', 'learning'.
+ */
+function dnd_vocab_log_review( $user_id, $vocab_id, $deck_id, $rating, $review_type ) {
+    $user_id  = (int) $user_id;
+    $vocab_id = (int) $vocab_id;
+    $deck_id  = (int) $deck_id;
+
+    if ( $user_id <= 0 || $vocab_id <= 0 || $deck_id <= 0 ) {
+        return;
+    }
+
+    $now      = current_time( 'timestamp' );
+    $date_key = wp_date( 'Y-m-d', $now );
+
+    $history = get_user_meta( $user_id, 'dnd_vocab_review_history', true );
+
+    if ( ! is_array( $history ) ) {
+        $history = array();
+    }
+
+    if ( ! isset( $history[ $date_key ] ) ) {
+        $history[ $date_key ] = array();
+    }
+
+    if ( ! isset( $history[ $date_key ][ $vocab_id ] ) ) {
+        $history[ $date_key ][ $vocab_id ] = array();
+    }
+
+    // Add review entry with timestamp.
+    $review_entry = array(
+        'deck_id'     => $deck_id,
+        'rating'      => (int) $rating,
+        'review_type' => sanitize_text_field( $review_type ),
+        'timestamp'   => $now,
+    );
+
+    // If same card reviewed multiple times in same day, append to array.
+    if ( ! isset( $history[ $date_key ][ $vocab_id ]['reviews'] ) ) {
+        $history[ $date_key ][ $vocab_id ]['reviews'] = array();
+    }
+
+    $history[ $date_key ][ $vocab_id ]['reviews'][] = $review_entry;
+    $history[ $date_key ][ $vocab_id ]['deck_id']   = $deck_id;
+    $history[ $date_key ][ $vocab_id ]['last_review_type'] = $review_type;
+
+    update_user_meta( $user_id, 'dnd_vocab_review_history', $history );
+}
+
+/**
+ * Get review history for a user within a date range.
+ *
+ * @param int    $user_id   User ID.
+ * @param string $start_date Start date in Y-m-d format.
+ * @param string $end_date   End date in Y-m-d format.
+ * @return array Review history data.
+ */
+function dnd_vocab_get_review_history( $user_id, $start_date = '', $end_date = '' ) {
+    $user_id = (int) $user_id;
+
+    if ( $user_id <= 0 ) {
+        return array();
+    }
+
+    $history = get_user_meta( $user_id, 'dnd_vocab_review_history', true );
+
+    if ( ! is_array( $history ) ) {
+        return array();
+    }
+
+    // If no date range specified, return all.
+    if ( empty( $start_date ) && empty( $end_date ) ) {
+        return $history;
+    }
+
+    $filtered = array();
+
+    foreach ( $history as $date => $reviews ) {
+        if ( ! empty( $start_date ) && $date < $start_date ) {
+            continue;
+        }
+        if ( ! empty( $end_date ) && $date > $end_date ) {
+            continue;
+        }
+        $filtered[ $date ] = $reviews;
+    }
+
+    return $filtered;
+}
+
+/**
+ * Get heatmap data for a user (365 days past + 30 days future).
+ *
+ * @param int $user_id User ID.
+ * @return array Heatmap data with date keys and review counts.
+ */
+function dnd_vocab_get_heatmap_data( $user_id ) {
+    $user_id = (int) $user_id;
+
+    if ( $user_id <= 0 ) {
+        return array();
+    }
+
+    $now        = current_time( 'timestamp' );
+    $today      = wp_date( 'Y-m-d', $now );
+    $start_date = wp_date( 'Y-m-d', $now - ( 365 * DAY_IN_SECONDS ) );
+    $end_date   = wp_date( 'Y-m-d', $now + ( 30 * DAY_IN_SECONDS ) );
+
+    // Get review history for past dates.
+    $history = dnd_vocab_get_review_history( $user_id, $start_date, $today );
+
+    // Get SRS data for future due dates.
+    $srs_data = dnd_vocab_get_user_srs_data( $user_id );
+    $user_decks = get_user_meta( $user_id, 'dnd_vocab_user_decks', true );
+
+    if ( ! is_array( $user_decks ) ) {
+        $user_decks = array();
+    }
+
+    $user_decks = array_map( 'absint', $user_decks );
+
+    // Initialize heatmap data for all days.
+    $heatmap_data = array();
+
+    // Process past dates from history.
+    foreach ( $history as $date => $reviews ) {
+        if ( $date < $start_date || $date > $end_date ) {
+            continue;
+        }
+
+        // Count unique cards reviewed on this date.
+        $count = count( $reviews );
+        $heatmap_data[ $date ] = array(
+            'reviewed' => $count,
+            'due'      => 0,
+            'total'    => $count,
+        );
+    }
+
+    // Process future dates from SRS due dates.
+    foreach ( $srs_data as $vocab_id => $card ) {
+        if ( ! is_array( $card ) ) {
+            continue;
+        }
+
+        $card_deck_id = isset( $card['deck_id'] ) ? (int) $card['deck_id'] : 0;
+
+        if ( ! empty( $user_decks ) && ! in_array( $card_deck_id, $user_decks, true ) ) {
+            continue;
+        }
+
+        $due_timestamp = isset( $card['due'] ) ? (int) $card['due'] : 0;
+
+        if ( $due_timestamp > 0 ) {
+            $due_date = wp_date( 'Y-m-d', $due_timestamp );
+
+            if ( $due_date >= $today && $due_date <= $end_date ) {
+                if ( ! isset( $heatmap_data[ $due_date ] ) ) {
+                    $heatmap_data[ $due_date ] = array(
+                        'reviewed' => 0,
+                        'due'      => 0,
+                        'total'    => 0,
+                    );
+                }
+
+                $heatmap_data[ $due_date ]['due']++;
+                $heatmap_data[ $due_date ]['total']++;
+            }
+        }
+    }
+
+    ksort( $heatmap_data );
+
+    return $heatmap_data;
+}
+
+/**
+ * Calculate current streak for a user.
+ *
+ * @param int $user_id User ID.
+ * @return int Current streak in days.
+ */
+function dnd_vocab_calculate_streak( $user_id ) {
+    $user_id = (int) $user_id;
+
+    if ( $user_id <= 0 ) {
+        return 0;
+    }
+
+    $now   = current_time( 'timestamp' );
+    $today = wp_date( 'Y-m-d', $now );
+
+    $history = dnd_vocab_get_review_history( $user_id );
+
+    if ( empty( $history ) ) {
+        return 0;
+    }
+
+    $streak = 0;
+    $check_date = wp_date( 'Y-m-d', $now - DAY_IN_SECONDS ); // Start from yesterday.
+
+    // Count backwards from yesterday.
+    while ( true ) {
+        if ( isset( $history[ $check_date ] ) && ! empty( $history[ $check_date ] ) ) {
+            $streak++;
+        } else {
+            // Streak broken.
+            break;
+        }
+
+        $check_timestamp = strtotime( $check_date );
+        $check_timestamp -= DAY_IN_SECONDS;
+        $check_date = wp_date( 'Y-m-d', $check_timestamp );
+
+        // Limit to prevent infinite loop (max 1000 days).
+        if ( $streak > 1000 ) {
+            break;
+        }
+    }
+
+    return $streak;
+}
+
+/**
+ * Get cards reviewed or due on a specific date.
+ *
+ * @param int    $user_id User ID.
+ * @param string $date    Date in Y-m-d format.
+ * @return array Array with 'reviewed' and 'due' keys containing card data.
+ */
+function dnd_vocab_get_cards_by_date( $user_id, $date ) {
+    $user_id = (int) $user_id;
+
+    if ( $user_id <= 0 || empty( $date ) ) {
+        return array(
+            'reviewed' => array(),
+            'due'      => array(),
+        );
+    }
+
+    $now   = current_time( 'timestamp' );
+    $today = wp_date( 'Y-m-d', $now );
+
+    $result = array(
+        'reviewed' => array(),
+        'due'      => array(),
+    );
+
+    // Get reviewed cards from history.
+    $history = dnd_vocab_get_review_history( $user_id );
+
+    if ( isset( $history[ $date ] ) && is_array( $history[ $date ] ) ) {
+        foreach ( $history[ $date ] as $vocab_id => $review_data ) {
+            $vocab_id = (int) $vocab_id;
+
+            if ( $vocab_id <= 0 ) {
+                continue;
+            }
+
+            $vocab_post = get_post( $vocab_id );
+
+            if ( ! $vocab_post || 'dnd_vocab_item' !== $vocab_post->post_type ) {
+                continue;
+            }
+
+            $word = get_post_meta( $vocab_id, 'dnd_vocab_word', true );
+            if ( empty( $word ) ) {
+                $word = get_the_title( $vocab_post );
+            }
+
+            $deck_id = isset( $review_data['deck_id'] ) ? (int) $review_data['deck_id'] : 0;
+
+            $result['reviewed'][] = array(
+                'vocab_id'     => $vocab_id,
+                'word'         => $word,
+                'deck_id'      => $deck_id,
+                'review_type'  => isset( $review_data['last_review_type'] ) ? $review_data['last_review_type'] : 'review',
+                'review_count' => isset( $review_data['reviews'] ) ? count( $review_data['reviews'] ) : 1,
+            );
+        }
+    }
+
+    // Get due cards from SRS data (only for future dates).
+    if ( $date >= $today ) {
+        $srs_data   = dnd_vocab_get_user_srs_data( $user_id );
+        $user_decks = get_user_meta( $user_id, 'dnd_vocab_user_decks', true );
+
+        if ( ! is_array( $user_decks ) ) {
+            $user_decks = array();
+        }
+
+        $user_decks = array_map( 'absint', $user_decks );
+        $date_timestamp = strtotime( $date . ' 23:59:59' );
+
+        foreach ( $srs_data as $vocab_id => $card ) {
+            if ( ! is_array( $card ) ) {
+                continue;
+            }
+
+            $vocab_id = (int) $vocab_id;
+
+            if ( $vocab_id <= 0 ) {
+                continue;
+            }
+
+            $card_deck_id = isset( $card['deck_id'] ) ? (int) $card['deck_id'] : 0;
+
+            if ( ! empty( $user_decks ) && ! in_array( $card_deck_id, $user_decks, true ) ) {
+                continue;
+            }
+
+            $due_timestamp = isset( $card['due'] ) ? (int) $card['due'] : 0;
+
+            if ( $due_timestamp > 0 ) {
+                $due_date = wp_date( 'Y-m-d', $due_timestamp );
+
+                if ( $due_date === $date ) {
+                    $vocab_post = get_post( $vocab_id );
+
+                    if ( ! $vocab_post || 'dnd_vocab_item' !== $vocab_post->post_type ) {
+                        continue;
+                    }
+
+                    $word = get_post_meta( $vocab_id, 'dnd_vocab_word', true );
+                    if ( empty( $word ) ) {
+                        $word = get_the_title( $vocab_post );
+                    }
+
+                    $result['due'][] = array(
+                        'vocab_id' => $vocab_id,
+                        'word'     => $word,
+                        'deck_id'  => $card_deck_id,
+                    );
+                }
+            }
+        }
+    }
+
+    return $result;
 }
