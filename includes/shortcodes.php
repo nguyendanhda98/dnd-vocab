@@ -520,4 +520,332 @@ function dnd_vocab_render_vocab_detail_view( $deck_id, $vocab_id ) {
 	return ob_get_clean();
 }
 
+/**
+ * Study shortcode with spaced repetition (Anki-like).
+ *
+ * Shortcode: [dnd_vocab_study]
+ *
+ * @param array $atts Shortcode attributes.
+ * @return string
+ */
+function dnd_vocab_render_study_shortcode( $atts ) {
+	$atts = shortcode_atts(
+		array(),
+		$atts,
+		'dnd_vocab_study'
+	);
+
+	if ( ! is_user_logged_in() ) {
+		return '<p>' . esc_html__( 'Hãy đăng nhập để sử dụng chế độ học và ôn tập từ vựng.', 'dnd-vocab' ) . '</p>';
+	}
+
+	$user_id    = get_current_user_id();
+	$user_decks = get_user_meta( $user_id, 'dnd_vocab_user_decks', true );
+
+	if ( ! is_array( $user_decks ) ) {
+		$user_decks = array();
+	}
+
+	$user_decks = array_map( 'absint', $user_decks );
+	$user_decks = array_filter( $user_decks );
+
+	if ( empty( $user_decks ) ) {
+		return '<p>' . esc_html__( 'Bạn chưa thêm deck nào vào bộ từ vựng cá nhân. Hãy vào trang thư viện deck để thêm ít nhất một deck trước khi học.', 'dnd-vocab' ) . '</p>';
+	}
+
+	// Check for due items (words that need review today).
+	$due_items        = array();
+	$due_items_count  = 0;
+	if ( function_exists( 'dnd_vocab_srs_get_due_items' ) ) {
+		$due_items = dnd_vocab_srs_get_due_items( $user_id, $user_decks );
+		$due_items_count = is_array( $due_items ) ? count( $due_items ) : 0;
+	}
+
+	$message          = '';
+	$review_notice    = '';
+	$current_vocab_id = 0;
+	$current_deck_id  = 0;
+	$view_side        = 'front'; // front|back.
+
+	// Always show notification about review status.
+	if ( $due_items_count > 0 ) {
+		$review_notice = sprintf(
+			/* translators: %d: number of words to review */
+			esc_html__( 'Bạn có %d từ cần ôn tập hôm nay, ôn tập ngay.', 'dnd-vocab' ),
+			$due_items_count
+		);
+	} else {
+		$review_notice = esc_html__( 'Bạn không có từ nào cần ôn tập hôm nay. Bạn có thể học từ mới.', 'dnd-vocab' );
+	}
+
+	// Handle study actions (show back / answer).
+	if ( 'POST' === $_SERVER['REQUEST_METHOD'] && isset( $_POST['dnd_vocab_study_action'] ) ) {
+		$action = sanitize_text_field( wp_unslash( $_POST['dnd_vocab_study_action'] ) );
+
+		if ( in_array( $action, array( 'show_back', 'answer' ), true )
+			&& isset( $_POST['dnd_vocab_study_nonce'] )
+			&& wp_verify_nonce(
+				sanitize_text_field( wp_unslash( $_POST['dnd_vocab_study_nonce'] ) ),
+				'dnd_vocab_study'
+			)
+		) {
+			$vocab_id = isset( $_POST['dnd_vocab_study_vocab_id'] ) ? absint( $_POST['dnd_vocab_study_vocab_id'] ) : 0;
+			$deck_id  = isset( $_POST['dnd_vocab_study_deck_id'] ) ? absint( $_POST['dnd_vocab_study_deck_id'] ) : 0;
+
+			if ( $vocab_id && $deck_id && in_array( $deck_id, $user_decks, true ) ) {
+				// Extra safety: ensure vocab belongs to deck.
+				$linked_deck_id = (int) get_post_meta( $vocab_id, '_dnd_vocab_deck_id', true );
+
+				if ( $linked_deck_id === $deck_id ) {
+					if ( 'show_back' === $action ) {
+						// Keep current card, only switch to back view.
+						$current_vocab_id = $vocab_id;
+						$current_deck_id  = $deck_id;
+						$view_side        = 'back';
+					} elseif ( 'answer' === $action ) {
+						$rating = isset( $_POST['dnd_vocab_study_rating'] ) ? intval( $_POST['dnd_vocab_study_rating'] ) : 0;
+
+						if ( function_exists( 'dnd_vocab_srs_apply_answer' ) ) {
+							dnd_vocab_srs_apply_answer( $user_id, $vocab_id, $deck_id, $rating );
+						}
+
+						// After answering, we will pick next card below.
+					}
+				}
+			}
+		} else {
+			$message = esc_html__( 'Không thể xử lý yêu cầu học từ. Vui lòng thử lại.', 'dnd-vocab' );
+		}
+	}
+
+	// If not showing back side of an existing card, select next card (review or new).
+	if ( ! $current_vocab_id || 'back' !== $view_side ) {
+		$view_side        = 'front';
+		$current_vocab_id = 0;
+		$current_deck_id  = 0;
+
+		// Refresh due items list (in case it changed after answering).
+		if ( function_exists( 'dnd_vocab_srs_get_due_items' ) ) {
+			$due_items = dnd_vocab_srs_get_due_items( $user_id, $user_decks );
+			$due_items_count = is_array( $due_items ) ? count( $due_items ) : 0;
+		} else {
+			$due_items = array();
+			$due_items_count = 0;
+		}
+
+		// Update review notice if count changed.
+		if ( $due_items_count > 0 ) {
+			$review_notice = sprintf(
+				/* translators: %d: number of words to review */
+				esc_html__( 'Bạn có %d từ cần ôn tập hôm nay, ôn tập ngay.', 'dnd-vocab' ),
+				$due_items_count
+			);
+		} else {
+			$review_notice = esc_html__( 'Bạn không có từ nào cần ôn tập hôm nay. Bạn có thể học từ mới.', 'dnd-vocab' );
+		}
+
+		if ( ! empty( $due_items ) ) {
+			// Take the first due item.
+			$current_vocab_id = (int) reset( $due_items );
+			$current_deck_id  = (int) get_post_meta( $current_vocab_id, '_dnd_vocab_deck_id', true );
+		}
+
+		// Only allow picking new vocabulary item if there are no due items (x = 0).
+		if ( ! $current_vocab_id && 0 === $due_items_count && function_exists( 'dnd_vocab_srs_pick_next_new_item' ) ) {
+			$new_id = dnd_vocab_srs_pick_next_new_item( $user_id, $user_decks );
+
+			if ( $new_id ) {
+				$current_vocab_id = (int) $new_id;
+				$current_deck_id  = (int) get_post_meta( $current_vocab_id, '_dnd_vocab_deck_id', true );
+			}
+		}
+	}
+
+	// No card to study.
+	if ( ! $current_vocab_id || ! $current_deck_id ) {
+		ob_start();
+		?>
+		<div class="dnd-vocab-study">
+			<?php if ( $message ) : ?>
+				<div class="dnd-vocab-study__notice">
+					<?php echo esc_html( $message ); ?>
+				</div>
+			<?php endif; ?>
+
+			<p><?php esc_html_e( 'Hôm nay bạn đã học xong. Hiện không còn từ nào để ôn hoặc học mới.', 'dnd-vocab' ); ?></p>
+		</div>
+		<?php
+		return ob_get_clean();
+	}
+
+	// Load vocabulary fields for current card.
+	$vocab_post = get_post( $current_vocab_id );
+
+	if ( ! $vocab_post || 'dnd_vocab_item' !== $vocab_post->post_type || 'publish' !== $vocab_post->post_status ) {
+		return '<p>' . esc_html__( 'Từ vựng không khả dụng để học.', 'dnd-vocab' ) . '</p>';
+	}
+
+	$word             = get_post_meta( $current_vocab_id, 'dnd_vocab_word', true );
+	$ipa              = get_post_meta( $current_vocab_id, 'dnd_vocab_ipa', true );
+	$definition       = get_post_meta( $current_vocab_id, 'dnd_vocab_definition', true );
+	$example          = get_post_meta( $current_vocab_id, 'dnd_vocab_example', true );
+	$image_url        = get_post_meta( $current_vocab_id, 'dnd_vocab_image', true );
+	$word_sound       = get_post_meta( $current_vocab_id, 'dnd_vocab_word_sound', true );
+	$definition_sound = get_post_meta( $current_vocab_id, 'dnd_vocab_definition_sound', true );
+	$example_sound    = get_post_meta( $current_vocab_id, 'dnd_vocab_example_sound', true );
+	$short_vi         = get_post_meta( $current_vocab_id, 'dnd_vocab_short_vietnamese', true );
+	$full_vi          = get_post_meta( $current_vocab_id, 'dnd_vocab_full_vietnamese', true );
+	$suggestion       = get_post_meta( $current_vocab_id, 'dnd_vocab_suggestion', true );
+
+	if ( function_exists( 'dnd_vocab_strip_cloze' ) ) {
+		$definition = dnd_vocab_strip_cloze( $definition );
+		$example    = dnd_vocab_strip_cloze( $example );
+	}
+
+	$display_word = $word ? $word : get_the_title( $vocab_post );
+
+	ob_start();
+	?>
+	<div class="dnd-vocab-study">
+		<?php if ( $message ) : ?>
+			<div class="dnd-vocab-study__notice">
+				<?php echo esc_html( $message ); ?>
+			</div>
+		<?php endif; ?>
+
+		<?php if ( $review_notice ) : ?>
+			<div class="dnd-vocab-study__review-notice">
+				<p><?php echo esc_html( $review_notice ); ?></p>
+				<?php if ( $due_items_count > 0 ) : ?>
+					<p>
+						<a href="<?php echo esc_url( remove_query_arg( array( 'dnd_vocab_study_action', 'dnd_vocab_study_vocab_id', 'dnd_vocab_study_deck_id' ) ) ); ?>" class="dnd-vocab-study__button dnd-vocab-study__button--review">
+							<?php esc_html_e( 'Ôn tập ngay', 'dnd-vocab' ); ?>
+						</a>
+					</p>
+				<?php elseif ( 0 === $due_items_count ) : ?>
+					<p>
+						<a href="<?php echo esc_url( remove_query_arg( array( 'dnd_vocab_study_action', 'dnd_vocab_study_vocab_id', 'dnd_vocab_study_deck_id' ) ) ); ?>" class="dnd-vocab-study__button dnd-vocab-study__button--new">
+							<?php esc_html_e( 'Học từ mới', 'dnd-vocab' ); ?>
+						</a>
+					</p>
+				<?php endif; ?>
+			</div>
+		<?php endif; ?>
+
+		<div class="dnd-vocab-study__card dnd-vocab-study__card--<?php echo 'back' === $view_side ? 'back' : 'front'; ?>">
+			<div class="dnd-vocab-study__front">
+				<h2 class="dnd-vocab-study__word">
+					<?php echo esc_html( $display_word ); ?>
+					<?php if ( $ipa ) : ?>
+						<span class="dnd-vocab-study__ipa">/<?php echo esc_html( $ipa ); ?>/</span>
+					<?php endif; ?>
+				</h2>
+
+				<?php if ( $suggestion ) : ?>
+					<p class="dnd-vocab-study__suggestion">
+						<strong><?php esc_html_e( 'Gợi ý:', 'dnd-vocab' ); ?></strong>
+						<?php echo ' ' . esc_html( $suggestion ); ?>
+					</p>
+				<?php endif; ?>
+			</div>
+
+			<?php if ( 'back' === $view_side ) : ?>
+				<div class="dnd-vocab-study__back">
+					<?php if ( $short_vi || $full_vi ) : ?>
+						<div class="dnd-vocab-study__vietnamese">
+							<?php if ( $short_vi ) : ?>
+								<p><strong><?php esc_html_e( 'Nghĩa ngắn:', 'dnd-vocab' ); ?></strong> <?php echo esc_html( $short_vi ); ?></p>
+							<?php endif; ?>
+							<?php if ( $full_vi ) : ?>
+								<p><strong><?php esc_html_e( 'Nghĩa đầy đủ:', 'dnd-vocab' ); ?></strong> <?php echo esc_html( $full_vi ); ?></p>
+							<?php endif; ?>
+						</div>
+					<?php endif; ?>
+
+					<?php if ( $definition ) : ?>
+						<div class="dnd-vocab-study__definition">
+							<h3><?php esc_html_e( 'Định nghĩa', 'dnd-vocab' ); ?></h3>
+							<p><?php echo wp_kses_post( nl2br( esc_html( $definition ) ) ); ?></p>
+						</div>
+					<?php endif; ?>
+
+					<?php if ( $example ) : ?>
+						<div class="dnd-vocab-study__example">
+							<h3><?php esc_html_e( 'Ví dụ', 'dnd-vocab' ); ?></h3>
+							<p><?php echo wp_kses_post( nl2br( esc_html( $example ) ) ); ?></p>
+						</div>
+					<?php endif; ?>
+
+					<?php if ( $image_url ) : ?>
+						<div class="dnd-vocab-study__image">
+							<img src="<?php echo esc_url( $image_url ); ?>" alt="<?php echo esc_attr( $display_word ); ?>">
+						</div>
+					<?php endif; ?>
+
+					<?php if ( $word_sound || $definition_sound || $example_sound ) : ?>
+						<div class="dnd-vocab-study__audio">
+							<?php if ( $word_sound ) : ?>
+								<p>
+									<strong><?php esc_html_e( 'Phát âm từ:', 'dnd-vocab' ); ?></strong><br>
+									<audio controls src="<?php echo esc_url( $word_sound ); ?>"></audio>
+								</p>
+							<?php endif; ?>
+
+							<?php if ( $definition_sound ) : ?>
+								<p>
+									<strong><?php esc_html_e( 'Phát âm định nghĩa:', 'dnd-vocab' ); ?></strong><br>
+									<audio controls src="<?php echo esc_url( $definition_sound ); ?>"></audio>
+								</p>
+							<?php endif; ?>
+
+							<?php if ( $example_sound ) : ?>
+								<p>
+									<strong><?php esc_html_e( 'Phát âm ví dụ:', 'dnd-vocab' ); ?></strong><br>
+									<audio controls src="<?php echo esc_url( $example_sound ); ?>"></audio>
+								</p>
+							<?php endif; ?>
+						</div>
+					<?php endif; ?>
+				</div>
+			<?php endif; ?>
+		</div>
+
+		<div class="dnd-vocab-study__controls">
+			<?php if ( 'front' === $view_side ) : ?>
+				<form method="post" class="dnd-vocab-study__form dnd-vocab-study__form--show-back">
+					<?php wp_nonce_field( 'dnd_vocab_study', 'dnd_vocab_study_nonce' ); ?>
+					<input type="hidden" name="dnd_vocab_study_action" value="show_back">
+					<input type="hidden" name="dnd_vocab_study_vocab_id" value="<?php echo esc_attr( $current_vocab_id ); ?>">
+					<input type="hidden" name="dnd_vocab_study_deck_id" value="<?php echo esc_attr( $current_deck_id ); ?>">
+					<button type="submit" class="dnd-vocab-study__button dnd-vocab-study__button--show-back">
+						<?php esc_html_e( 'Hiện mặt sau', 'dnd-vocab' ); ?>
+					</button>
+				</form>
+			<?php else : ?>
+				<form method="post" class="dnd-vocab-study__form dnd-vocab-study__form--answer">
+					<?php wp_nonce_field( 'dnd_vocab_study', 'dnd_vocab_study_nonce' ); ?>
+					<input type="hidden" name="dnd_vocab_study_action" value="answer">
+					<input type="hidden" name="dnd_vocab_study_vocab_id" value="<?php echo esc_attr( $current_vocab_id ); ?>">
+					<input type="hidden" name="dnd_vocab_study_deck_id" value="<?php echo esc_attr( $current_deck_id ); ?>">
+
+					<div class="dnd-vocab-study__answer-buttons">
+						<button type="submit" name="dnd_vocab_study_rating" value="0" class="dnd-vocab-study__button dnd-vocab-study__button--again">
+							<?php esc_html_e( 'Chưa thuộc', 'dnd-vocab' ); ?>
+						</button>
+						<button type="submit" name="dnd_vocab_study_rating" value="3" class="dnd-vocab-study__button dnd-vocab-study__button--hard">
+							<?php esc_html_e( 'Chưa chắc chắn', 'dnd-vocab' ); ?>
+						</button>
+						<button type="submit" name="dnd_vocab_study_rating" value="5" class="dnd-vocab-study__button dnd-vocab-study__button--easy">
+							<?php esc_html_e( 'Đã thuộc', 'dnd-vocab' ); ?>
+						</button>
+					</div>
+				</form>
+			<?php endif; ?>
+		</div>
+	</div>
+	<?php
+
+	return ob_get_clean();
+}
+add_shortcode( 'dnd_vocab_study', 'dnd_vocab_render_study_shortcode' );
 
