@@ -28,6 +28,23 @@
 				self.showModal(date, count);
 			});
 
+			// Year navigation
+			$(document).on('click', '.dnd-vocab-heatmap__nav-btn', function(e) {
+				e.preventDefault();
+				var $btn = $(this);
+				
+				if ($btn.prop('disabled')) {
+					return;
+				}
+
+				var year = $btn.data('year');
+				if (!year) {
+					return;
+				}
+
+				self.navigateToYear(year);
+			});
+
 			// Close modal
 			$(document).on('click', '.dnd-vocab-heatmap__modal-close, .dnd-vocab-heatmap__modal-overlay', function(e) {
 				e.preventDefault();
@@ -42,6 +59,20 @@
 			});
 		},
 
+		navigateToYear: function(year) {
+			var self = this;
+			var $heatmap = $('.dnd-vocab-heatmap');
+			
+			if (!$heatmap.length) {
+				return;
+			}
+
+			// Update URL parameter
+			var url = new URL(window.location.href);
+			url.searchParams.set('heatmap_year', year);
+			window.location.href = url.toString();
+		},
+
 		showModal: function(date, count) {
 			var self = this;
 			var $modal = $('#dnd-vocab-heatmap-modal');
@@ -51,16 +82,19 @@
 			var $reviewedList = $modal.find('.dnd-vocab-heatmap__modal-list--reviewed');
 			var $dueList = $modal.find('.dnd-vocab-heatmap__modal-list--due');
 
-			// Format date for display
+			// Format date for display - match tooltip format: "X reviews on [Day] [Month] [Date], [Year]"
 			var dateObj = new Date(date + 'T00:00:00');
-			var dateStr = dateObj.toLocaleDateString('vi-VN', {
-				weekday: 'long',
-				year: 'numeric',
-				month: 'long',
-				day: 'numeric'
-			});
+			var dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+			var monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+			
+			var dayName = dayNames[dateObj.getDay()];
+			var monthName = monthNames[dateObj.getMonth()];
+			var dayNumber = dateObj.getDate();
+			var year = dateObj.getFullYear();
+			
+			var dateStr = count + ' reviews on ' + dayName + ' ' + monthName + ' ' + dayNumber + ', ' + year;
 
-			$title.text(dateStr + ' (' + count + ' ' + (dndVocabHeatmap.i18n.cards || 'cards') + ')');
+			$title.text(dateStr);
 			$modal.addClass('active');
 			$loading.show();
 			$content.hide();

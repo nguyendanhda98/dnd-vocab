@@ -871,29 +871,84 @@ function dnd_vocab_render_review_heatmap_shortcode( $atts ) {
 	// Enqueue assets.
 	dnd_vocab_enqueue_heatmap_assets();
 
-	// Get heatmap data.
+	// Get selected year from URL parameter or default to current year.
+	$now = current_time( 'timestamp' );
+	$current_year = (int) wp_date( 'Y', $now );
+	$selected_year = isset( $_GET['heatmap_year'] ) ? (int) $_GET['heatmap_year'] : $current_year;
+	
+	// Validate year range.
+	if ( $selected_year < 2000 || $selected_year > 2100 ) {
+		$selected_year = $current_year;
+	}
+
+	// Get today's statistics for title.
+	$today_stats = array( 'cards' => 0, 'seconds' => 0 );
+	if ( function_exists( 'dnd_vocab_get_today_stats' ) ) {
+		$today_stats = dnd_vocab_get_today_stats( $user_id );
+	}
+
+	// Get year-specific heatmap data.
 	$heatmap_data = array();
-	$streak       = 0;
-
-	if ( function_exists( 'dnd_vocab_get_heatmap_data' ) ) {
-		$heatmap_data = dnd_vocab_get_heatmap_data( $user_id );
+	if ( function_exists( 'dnd_vocab_get_heatmap_data_for_year' ) ) {
+		$heatmap_data = dnd_vocab_get_heatmap_data_for_year( $user_id, $selected_year );
 	}
 
-	if ( function_exists( 'dnd_vocab_calculate_streak' ) ) {
-		$streak = dnd_vocab_calculate_streak( $user_id );
+	// Get year-specific statistics.
+	$year_stats = array(
+		'daily_average'        => 0,
+		'days_learned_percent' => 0,
+		'longest_streak'        => 0,
+		'current_streak'        => 0,
+	);
+	if ( function_exists( 'dnd_vocab_get_year_stats' ) ) {
+		$year_stats = dnd_vocab_get_year_stats( $user_id, $selected_year );
 	}
+
+	$today = wp_date( 'Y-m-d', $now );
+	$today_year = (int) wp_date( 'Y', $now );
+
+	// Calculate year boundaries for calendar.
+	$year_start = $selected_year . '-01-01';
+	$year_end = $selected_year . '-12-31';
+	
+	// Get first day of year and its day of week (0 = Sunday, 6 = Saturday).
+	$first_day_timestamp = strtotime( $year_start );
+	$first_day_of_week = (int) wp_date( 'w', $first_day_timestamp );
+	
+	// Start calendar from the Sunday of the week containing Jan 1.
+	$calendar_start_timestamp = $first_day_timestamp - ( $first_day_of_week * DAY_IN_SECONDS );
+	$calendar_start = wp_date( 'Y-m-d', $calendar_start_timestamp );
+	
+	// Calculate end date (53 weeks later).
+	$calendar_end_timestamp = $calendar_start_timestamp + ( 53 * 7 * DAY_IN_SECONDS ) - DAY_IN_SECONDS;
+	$calendar_end = wp_date( 'Y-m-d', $calendar_end_timestamp );
 
 	ob_start();
 	?>
-	<div class="dnd-vocab-heatmap" data-user-id="<?php echo esc_attr( $user_id ); ?>">
+	<div class="dnd-vocab-heatmap" data-user-id="<?php echo esc_attr( $user_id ); ?>" data-year="<?php echo esc_attr( $selected_year ); ?>">
 		<div class="dnd-vocab-heatmap__header">
-			<h2 class="dnd-vocab-heatmap__title"><?php esc_html_e( 'Lịch sử ôn tập', 'dnd-vocab' ); ?></h2>
-			<?php if ( $streak > 0 ) : ?>
-				<div class="dnd-vocab-heatmap__streak">
-					<span class="dnd-vocab-heatmap__streak-label"><?php esc_html_e( 'Chuỗi ngày:', 'dnd-vocab' ); ?></span>
-					<span class="dnd-vocab-heatmap__streak-value"><?php echo esc_html( $streak ); ?> <?php esc_html_e( 'ngày', 'dnd-vocab' ); ?></span>
-				</div>
-			<?php endif; ?>
+			<h2 class="dnd-vocab-heatmap__title">
+				<?php
+				$cards_text = sprintf(
+					_n( '%d card', '%d cards', $today_stats['cards'], 'dnd-vocab' ),
+					$today_stats['cards']
+				);
+				$seconds_text = sprintf(
+					_n( '%d second', '%d seconds', $today_stats['seconds'], 'dnd-vocab' ),
+					$today_stats['seconds']
+				);
+				printf(
+					esc_html__( 'Studied %1$s in %2$s today.', 'dnd-vocab' ),
+					esc_html( $cards_text ),
+					esc_html( $seconds_text )
+				);
+				?>
+			</h2>
+			<div class="dnd-vocab-heatmap__navigation">
+				<button class="dnd-vocab-heatmap__nav-btn dnd-vocab-heatmap__nav-btn--prev" data-year="<?php echo esc_attr( $selected_year - 1 ); ?>" aria-label="<?php esc_attr_e( 'Previous year', 'dnd-vocab' ); ?>">&lt;</button>
+				<button class="dnd-vocab-heatmap__nav-btn dnd-vocab-heatmap__nav-btn--today" data-year="<?php echo esc_attr( $current_year ); ?>" aria-label="<?php esc_attr_e( 'Today', 'dnd-vocab' ); ?>">T</button>
+				<button class="dnd-vocab-heatmap__nav-btn dnd-vocab-heatmap__nav-btn--next" data-year="<?php echo esc_attr( $selected_year + 1 ); ?>" aria-label="<?php esc_attr_e( 'Next year', 'dnd-vocab' ); ?>" <?php echo ( $selected_year >= $current_year ) ? 'disabled' : ''; ?>>&gt;</button>
+			</div>
 		</div>
 
 		<div class="dnd-vocab-heatmap__legend">
@@ -911,32 +966,17 @@ function dnd_vocab_render_review_heatmap_shortcode( $atts ) {
 		<div class="dnd-vocab-heatmap__container">
 			<div class="dnd-vocab-heatmap__grid">
 				<?php
-				$now   = current_time( 'timestamp' );
-				$today = wp_date( 'Y-m-d', $now );
-				$start_date = wp_date( 'Y-m-d', $now - ( 365 * DAY_IN_SECONDS ) );
-				$end_date   = wp_date( 'Y-m-d', $now + ( 30 * DAY_IN_SECONDS ) );
+				$current_date = $calendar_start;
+				$total_days   = 0;
 
-				$current_date = $start_date;
-				$week_start = true;
-				$week_count = 0;
+				// Vẽ hình chữ nhật 7 (hàng) x 53 (tuần) các ô liền nhau.
+				while ( $current_date <= $calendar_end && $total_days < ( 53 * 7 ) ) {
+					$count      = 0;
+					$is_today   = ( $current_date === $today );
+					$is_in_year = ( $current_date >= $year_start && $current_date <= $year_end );
+					$is_future  = ( $current_date > $today );
 
-				while ( $current_date <= $end_date ) {
-					if ( $week_start ) {
-						// Show week label.
-						$week_timestamp = strtotime( $current_date );
-						$week_label = wp_date( 'M j', $week_timestamp );
-						?>
-						<div class="dnd-vocab-heatmap__week-label"><?php echo esc_html( $week_label ); ?></div>
-						<?php
-						$week_start = false;
-					}
-
-					$count = 0;
-					$is_today = ( $current_date === $today );
-					$is_past = ( $current_date < $today );
-					$is_future = ( $current_date > $today );
-
-					if ( isset( $heatmap_data[ $current_date ] ) ) {
+					if ( $is_in_year && isset( $heatmap_data[ $current_date ] ) ) {
 						$count = (int) $heatmap_data[ $current_date ]['total'];
 					}
 
@@ -954,7 +994,7 @@ function dnd_vocab_render_review_heatmap_shortcode( $atts ) {
 						}
 					}
 
-					$classes = array( 'dnd-vocab-heatmap__day' );
+					$classes   = array( 'dnd-vocab-heatmap__day' );
 					$classes[] = 'dnd-vocab-heatmap__day--' . $intensity;
 
 					if ( $is_today ) {
@@ -964,33 +1004,63 @@ function dnd_vocab_render_review_heatmap_shortcode( $atts ) {
 						$classes[] = 'dnd-vocab-heatmap__day--future';
 					}
 
-					$date_label = wp_date( 'M j, Y', strtotime( $current_date ) );
+					// Format date for tooltip.
+					$date_timestamp = strtotime( $current_date );
+					$day_name       = wp_date( 'l', $date_timestamp );
+					$month_name     = wp_date( 'F', $date_timestamp );
+					$day_number     = wp_date( 'j', $date_timestamp );
+					$date_year      = wp_date( 'Y', $date_timestamp );
+					$tooltip_text   = sprintf(
+						esc_html__( '%1$d reviews on %2$s %3$s %4$d, %5$s', 'dnd-vocab' ),
+						$count,
+						$day_name,
+						$month_name,
+						$day_number,
+						$date_year
+					);
 					?>
 					<div class="<?php echo esc_attr( implode( ' ', $classes ) ); ?>"
 						 data-date="<?php echo esc_attr( $current_date ); ?>"
 						 data-count="<?php echo esc_attr( $count ); ?>"
-						 title="<?php echo esc_attr( $date_label . ': ' . $count . ' ' . __( 'cards', 'dnd-vocab' ) ); ?>">
+						 title="<?php echo esc_attr( $tooltip_text ); ?>">
 					</div>
 					<?php
 
-					$week_count++;
-					if ( $week_count >= 7 ) {
-						$week_count = 0;
-						$week_start = true;
-					}
+					$total_days++;
 
-				// Increment date safely.
-				$date_obj = date_create( $current_date );
-				if ( $date_obj ) {
-					$date_obj->modify( '+1 day' );
-					$current_date = $date_obj->format( 'Y-m-d' );
-				} else {
-					// Fallback.
-					$current_timestamp = strtotime( $current_date . ' +1 day' );
-					$current_date = wp_date( 'Y-m-d', $current_timestamp );
-				}
+					// Increment date safely.
+					$date_obj = date_create( $current_date );
+					if ( $date_obj ) {
+						$date_obj->modify( '+1 day' );
+						$current_date = $date_obj->format( 'Y-m-d' );
+					} else {
+						// Fallback.
+						$current_timestamp = strtotime( $current_date . ' +1 day' );
+						$current_date      = wp_date( 'Y-m-d', $current_timestamp );
+					}
 				}
 				?>
+			</div>
+		</div>
+
+		<div class="dnd-vocab-heatmap__year-label"><?php echo esc_html( $selected_year ); ?></div>
+
+		<div class="dnd-vocab-heatmap__stats">
+			<div class="dnd-vocab-heatmap__stat">
+				<span class="dnd-vocab-heatmap__stat-label"><?php esc_html_e( 'Daily average:', 'dnd-vocab' ); ?></span>
+				<span class="dnd-vocab-heatmap__stat-value dnd-vocab-heatmap__stat-value--green"><?php echo esc_html( $year_stats['daily_average'] ); ?> <?php esc_html_e( 'reviews', 'dnd-vocab' ); ?></span>
+			</div>
+			<div class="dnd-vocab-heatmap__stat">
+				<span class="dnd-vocab-heatmap__stat-label"><?php esc_html_e( 'Days learned:', 'dnd-vocab' ); ?></span>
+				<span class="dnd-vocab-heatmap__stat-value dnd-vocab-heatmap__stat-value--yellow"><?php echo esc_html( $year_stats['days_learned_percent'] ); ?>%</span>
+			</div>
+			<div class="dnd-vocab-heatmap__stat">
+				<span class="dnd-vocab-heatmap__stat-label"><?php esc_html_e( 'Longest streak:', 'dnd-vocab' ); ?></span>
+				<span class="dnd-vocab-heatmap__stat-value dnd-vocab-heatmap__stat-value--green"><?php echo esc_html( $year_stats['longest_streak'] ); ?> <?php esc_html_e( 'days', 'dnd-vocab' ); ?></span>
+			</div>
+			<div class="dnd-vocab-heatmap__stat">
+				<span class="dnd-vocab-heatmap__stat-label"><?php esc_html_e( 'Current streak:', 'dnd-vocab' ); ?></span>
+				<span class="dnd-vocab-heatmap__stat-value dnd-vocab-heatmap__stat-value--green"><?php echo esc_html( $year_stats['current_streak'] ); ?> <?php esc_html_e( 'days', 'dnd-vocab' ); ?></span>
 			</div>
 		</div>
 	</div>
@@ -1090,4 +1160,45 @@ function dnd_vocab_ajax_get_cards_by_date() {
 	wp_send_json_success( $cards );
 }
 add_action( 'wp_ajax_dnd_vocab_get_cards_by_date', 'dnd_vocab_ajax_get_cards_by_date' );
+
+/**
+ * AJAX handler for getting year heatmap data.
+ */
+function dnd_vocab_ajax_get_year_heatmap() {
+	check_ajax_referer( 'dnd_vocab_heatmap_ajax', 'nonce' );
+
+	if ( ! is_user_logged_in() ) {
+		wp_send_json_error( array( 'message' => __( 'Bạn cần đăng nhập', 'dnd-vocab' ) ) );
+	}
+
+	$user_id = get_current_user_id();
+	$year    = isset( $_POST['year'] ) ? (int) $_POST['year'] : 0;
+
+	if ( $year < 2000 || $year > 2100 ) {
+		wp_send_json_error( array( 'message' => __( 'Năm không hợp lệ', 'dnd-vocab' ) ) );
+	}
+
+	// Get heatmap data for the year.
+	$heatmap_data = array();
+	if ( function_exists( 'dnd_vocab_get_heatmap_data_for_year' ) ) {
+		$heatmap_data = dnd_vocab_get_heatmap_data_for_year( $user_id, $year );
+	}
+
+	// Get year statistics.
+	$year_stats = array(
+		'daily_average'        => 0,
+		'days_learned_percent' => 0,
+		'longest_streak'        => 0,
+		'current_streak'        => 0,
+	);
+	if ( function_exists( 'dnd_vocab_get_year_stats' ) ) {
+		$year_stats = dnd_vocab_get_year_stats( $user_id, $year );
+	}
+
+	wp_send_json_success( array(
+		'heatmap_data' => $heatmap_data,
+		'stats'        => $year_stats,
+	) );
+}
+add_action( 'wp_ajax_dnd_vocab_get_year_heatmap', 'dnd_vocab_ajax_get_year_heatmap' );
 

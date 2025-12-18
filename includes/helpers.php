@@ -581,6 +581,12 @@ function dnd_vocab_log_review( $user_id, $vocab_id, $deck_id, $rating, $review_t
     $history[ $date_key ][ $vocab_id ]['deck_id']   = $deck_id;
     $history[ $date_key ][ $vocab_id ]['last_review_type'] = $review_type;
 
+    // Track session start time for time calculation.
+    if ( ! isset( $history[ $date_key ]['_session_start'] ) ) {
+        $history[ $date_key ]['_session_start'] = $now;
+    }
+    $history[ $date_key ]['_last_review'] = $now;
+
     update_user_meta( $user_id, 'dnd_vocab_review_history', $history );
 }
 
@@ -874,4 +880,269 @@ function dnd_vocab_get_cards_by_date( $user_id, $date ) {
     }
 
     return $result;
+}
+
+/**
+ * Get today's study statistics (cards reviewed and time spent).
+ *
+ * @param int $user_id User ID.
+ * @return array Array with 'cards' (count) and 'seconds' (time spent).
+ */
+function dnd_vocab_get_today_stats( $user_id ) {
+    $user_id = (int) $user_id;
+
+    if ( $user_id <= 0 ) {
+        return array(
+            'cards'   => 0,
+            'seconds' => 0,
+        );
+    }
+
+    $now      = current_time( 'timestamp' );
+    $today    = wp_date( 'Y-m-d', $now );
+    $history  = dnd_vocab_get_review_history( $user_id );
+
+    $cards_count = 0;
+    $time_spent  = 0;
+
+    if ( isset( $history[ $today ] ) && is_array( $history[ $today ] ) ) {
+        // Count unique cards reviewed today.
+        foreach ( $history[ $today ] as $vocab_id => $review_data ) {
+            if ( '_session_start' === $vocab_id || '_last_review' === $vocab_id ) {
+                continue;
+            }
+            $cards_count++;
+        }
+
+        // Calculate time spent: difference between first and last review.
+        if ( isset( $history[ $today ]['_session_start'] ) && isset( $history[ $today ]['_last_review'] ) ) {
+            $session_start = (int) $history[ $today ]['_session_start'];
+            $last_review   = (int) $history[ $today ]['_last_review'];
+            $time_spent   = max( 1, $last_review - $session_start ); // Minimum 1 second.
+        } else {
+            // Fallback: estimate time based on review count (average 2 seconds per card).
+            $time_spent = max( 1, $cards_count * 2 );
+        }
+    }
+
+    return array(
+        'cards'   => $cards_count,
+        'seconds' => $time_spent,
+    );
+}
+
+/**
+ * Get heatmap data for a specific year.
+ *
+ * @param int $user_id User ID.
+ * @param int $year    Year (e.g., 2024).
+ * @return array Heatmap data with date keys and review counts.
+ */
+function dnd_vocab_get_heatmap_data_for_year( $user_id, $year ) {
+    $user_id = (int) $user_id;
+    $year    = (int) $year;
+
+    if ( $user_id <= 0 || $year < 2000 || $year > 2100 ) {
+        return array();
+    }
+
+    $start_date = $year . '-01-01';
+    $end_date   = $year . '-12-31';
+
+    // Get review history for the year.
+    $history = dnd_vocab_get_review_history( $user_id, $start_date, $end_date );
+
+    // Initialize heatmap data.
+    $heatmap_data = array();
+
+    // Process dates from history.
+    foreach ( $history as $date => $reviews ) {
+        if ( $date < $start_date || $date > $end_date ) {
+            continue;
+        }
+
+        // Count unique cards reviewed on this date.
+        $count = 0;
+        foreach ( $reviews as $vocab_id => $review_data ) {
+            if ( '_session_start' === $vocab_id || '_last_review' === $vocab_id ) {
+                continue;
+            }
+            $count++;
+        }
+
+        if ( $count > 0 ) {
+            $heatmap_data[ $date ] = array(
+                'reviewed' => $count,
+                'due'      => 0,
+                'total'    => $count,
+            );
+        }
+    }
+
+    ksort( $heatmap_data );
+
+    return $heatmap_data;
+}
+
+/**
+ * Get year-specific statistics.
+ *
+ * @param int $user_id User ID.
+ * @param int $year    Year (e.g., 2024).
+ * @return array Array with statistics: daily_average, days_learned_percent, longest_streak, current_streak.
+ */
+function dnd_vocab_get_year_stats( $user_id, $year ) {
+    $user_id = (int) $user_id;
+    $year    = (int) $year;
+
+    if ( $user_id <= 0 || $year < 2000 || $year > 2100 ) {
+        return array(
+            'daily_average'        => 0,
+            'days_learned_percent' => 0,
+            'longest_streak'        => 0,
+            'current_streak'        => 0,
+        );
+    }
+
+    $heatmap_data = dnd_vocab_get_heatmap_data_for_year( $user_id, $year );
+    $now          = current_time( 'timestamp' );
+    $today        = wp_date( 'Y-m-d', $now );
+    $current_year = (int) wp_date( 'Y', $now );
+
+    // Calculate daily average.
+    $total_reviews = 0;
+    $days_with_data = 0;
+    foreach ( $heatmap_data as $date => $data ) {
+        $total_reviews += (int) $data['total'];
+        $days_with_data++;
+    }
+    $daily_average = $days_with_data > 0 ? round( $total_reviews / $days_with_data ) : 0;
+
+    // Calculate days learned percentage.
+    $days_in_year = ( $year === $current_year ) ? (int) wp_date( 'z', $now ) + 1 : ( date( 'L', mktime( 0, 0, 0, 1, 1, $year ) ) ? 366 : 365 );
+    $days_learned_percent = $days_in_year > 0 ? round( ( $days_with_data / $days_in_year ) * 100 ) : 0;
+
+    // Get longest streak for the year.
+    $longest_streak = dnd_vocab_get_longest_streak( $user_id, $year );
+
+    // Calculate current streak (only if viewing current year).
+    $current_streak = 0;
+    if ( $year === $current_year ) {
+        $current_streak = dnd_vocab_calculate_streak( $user_id );
+    } else {
+        // For past years, calculate streak ending on Dec 31.
+        $history = dnd_vocab_get_review_history( $user_id, $year . '-01-01', $year . '-12-31' );
+        $check_date = $year . '-12-31';
+        $streak = 0;
+
+        while ( true ) {
+            if ( isset( $history[ $check_date ] ) && ! empty( $history[ $check_date ] ) ) {
+                $has_data = false;
+                foreach ( $history[ $check_date ] as $vocab_id => $review_data ) {
+                    if ( '_session_start' !== $vocab_id && '_last_review' !== $vocab_id ) {
+                        $has_data = true;
+                        break;
+                    }
+                }
+                if ( $has_data ) {
+                    $streak++;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+
+            $check_timestamp = strtotime( $check_date );
+            $check_timestamp -= DAY_IN_SECONDS;
+            $check_date = wp_date( 'Y-m-d', $check_timestamp );
+
+            // Stop if we've gone past the start of the year.
+            if ( substr( $check_date, 0, 4 ) !== (string) $year ) {
+                break;
+            }
+
+            // Limit to prevent infinite loop.
+            if ( $streak > 366 ) {
+                break;
+            }
+        }
+        $current_streak = $streak;
+    }
+
+    return array(
+        'daily_average'        => $daily_average,
+        'days_learned_percent' => $days_learned_percent,
+        'longest_streak'        => $longest_streak,
+        'current_streak'        => $current_streak,
+    );
+}
+
+/**
+ * Get longest streak for a specific year.
+ *
+ * @param int $user_id User ID.
+ * @param int $year    Year (e.g., 2024).
+ * @return int Longest streak in days.
+ */
+function dnd_vocab_get_longest_streak( $user_id, $year ) {
+    $user_id = (int) $user_id;
+    $year    = (int) $year;
+
+    if ( $user_id <= 0 || $year < 2000 || $year > 2100 ) {
+        return 0;
+    }
+
+    $history = dnd_vocab_get_review_history( $user_id, $year . '-01-01', $year . '-12-31' );
+
+    if ( empty( $history ) ) {
+        return 0;
+    }
+
+    $longest_streak = 0;
+    $current_streak = 0;
+    $start_date = $year . '-01-01';
+    $end_date   = $year . '-12-31';
+
+    // Create array of all dates in the year with activity.
+    $active_dates = array();
+    foreach ( $history as $date => $reviews ) {
+        if ( $date < $start_date || $date > $end_date ) {
+            continue;
+        }
+
+        // Check if there's actual review data (not just metadata).
+        foreach ( $reviews as $vocab_id => $review_data ) {
+            if ( '_session_start' !== $vocab_id && '_last_review' !== $vocab_id ) {
+                $active_dates[] = $date;
+                break;
+            }
+        }
+    }
+
+    // Sort dates.
+    sort( $active_dates );
+
+    // Find longest consecutive streak.
+    if ( ! empty( $active_dates ) ) {
+        $current_streak = 1;
+        $longest_streak = 1;
+
+        for ( $i = 1; $i < count( $active_dates ); $i++ ) {
+            $prev_date = strtotime( $active_dates[ $i - 1 ] );
+            $curr_date = strtotime( $active_dates[ $i ] );
+            $days_diff = ( $curr_date - $prev_date ) / DAY_IN_SECONDS;
+
+            if ( $days_diff === 1 ) {
+                // Consecutive day.
+                $current_streak++;
+                $longest_streak = max( $longest_streak, $current_streak );
+            } else {
+                // Streak broken.
+                $current_streak = 1;
+            }
+        }
+    }
+
+    return $longest_streak;
 }

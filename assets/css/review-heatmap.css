@@ -10,15 +10,50 @@
 
 .dnd-vocab-heatmap__header {
 	display: flex;
-	justify-content: space-between;
+	flex-direction: column;
 	align-items: center;
-	margin-bottom: 20px;
+	margin-bottom: 8px;
+	gap: 8px;
 }
 
 .dnd-vocab-heatmap__title {
 	margin: 0;
-	font-size: 24px;
-	font-weight: 600;
+	font-size: 16px;
+	font-weight: 400;
+	text-align: center;
+}
+
+.dnd-vocab-heatmap__navigation {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	justify-content: center;
+}
+
+.dnd-vocab-heatmap__nav-btn {
+	background: none;
+	border: 1px solid #d1d9e0;
+	border-radius: 4px;
+	padding: 4px 8px;
+	font-size: 14px;
+	cursor: pointer;
+	color: #24292f;
+	transition: background-color 0.2s ease, border-color 0.2s ease;
+	min-width: 28px;
+	height: 28px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.dnd-vocab-heatmap__nav-btn:hover:not(:disabled) {
+	background-color: #f6f8fa;
+	border-color: #0969da;
+}
+
+.dnd-vocab-heatmap__nav-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
 }
 
 .dnd-vocab-heatmap__streak {
@@ -42,7 +77,7 @@
 	align-items: center;
 	justify-content: flex-end;
 	gap: 8px;
-	margin-bottom: 16px;
+	margin-bottom: 8px;
 	font-size: 12px;
 	color: #666;
 }
@@ -80,21 +115,21 @@
 
 .dnd-vocab-heatmap__container {
 	overflow-x: auto;
+	margin-bottom: 4px;
 }
 
 .dnd-vocab-heatmap__grid {
 	display: grid;
-	grid-template-columns: auto repeat(7, 1fr);
+	/* 7 hàng (7 ngày trong tuần), các cột là tuần */
+	grid-auto-flow: column;
+	grid-template-rows: repeat(7, 11px);
+	grid-auto-columns: 11px;
 	gap: 3px;
 	min-width: max-content;
 }
 
 .dnd-vocab-heatmap__week-label {
-	font-size: 12px;
-	color: #666;
-	padding: 2px 4px;
-	text-align: right;
-	align-self: center;
+	display: none; /* Không dùng nhãn tuần trong layout hình chữ nhật */
 }
 
 .dnd-vocab-heatmap__day {
@@ -145,6 +180,48 @@
 .dnd-vocab-heatmap__day--future:hover {
 	transform: none;
 	box-shadow: none;
+}
+
+.dnd-vocab-heatmap__year-label {
+	text-align: center;
+	font-size: 14px;
+	font-weight: 600;
+	margin: 8px 0 4px 0;
+	color: #24292f;
+}
+
+.dnd-vocab-heatmap__stats {
+	display: flex;
+	flex-wrap: nowrap;
+	justify-content: center;
+	gap: 12px;
+	margin-top: 8px;
+	padding-top: 8px;
+	border-top: 1px solid #e1e4e8;
+}
+
+.dnd-vocab-heatmap__stat {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 13px;
+	white-space: nowrap;
+}
+
+.dnd-vocab-heatmap__stat-label {
+	color: #666;
+}
+
+.dnd-vocab-heatmap__stat-value {
+	font-weight: 600;
+}
+
+.dnd-vocab-heatmap__stat-value--green {
+	color: #0969da;
+}
+
+.dnd-vocab-heatmap__stat-value--yellow {
+	color: #9a6700;
 }
 
 /* Modal Styles */
@@ -294,9 +371,11 @@
 /* Responsive */
 @media (max-width: 768px) {
 	.dnd-vocab-heatmap__header {
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 12px;
+		gap: 6px;
+	}
+
+	.dnd-vocab-heatmap__title {
+		font-size: 14px;
 	}
 
 	.dnd-vocab-heatmap__grid {
@@ -306,6 +385,15 @@
 	.dnd-vocab-heatmap__day {
 		width: 10px;
 		height: 10px;
+	}
+
+	.dnd-vocab-heatmap__stats {
+		flex-wrap: wrap;
+		gap: 8px;
+	}
+
+	.dnd-vocab-heatmap__stat {
+		font-size: 12px;
 	}
 
 	.dnd-vocab-heatmap__modal-content {
