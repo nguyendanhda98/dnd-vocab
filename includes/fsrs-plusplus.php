@@ -46,7 +46,7 @@ function fsrs_create_initial_card_state() {
  * 
  * All values must be observed passively, never asked from the user.
  * 
- * @param int   $rating                   1=forgot, 2=hard, 3=remember
+ * @param int   $rating                   1=Again, 2=Hard, 3=Good, 4=Easy
  * @param float $elapsed_days             Days since last review
  * @param float $scheduled_interval       Originally scheduled interval (days)
  * @param float $actual_interval          Actual interval that passed (days)
@@ -143,9 +143,10 @@ function fsrs_compute_retrievability( $elapsed_days, $stability ) {
  * Ref: Section 5.1 - Difficulty Update
  * 
  * Rules:
- * - rating === 1 (forgot):    difficulty += 0.6
- * - rating === 2 (hard):      difficulty += 0.2
- * - rating === 3 (remember):  difficulty -= 0.3
+ * - rating === 1 (Again): difficulty += 0.6
+ * - rating === 2 (Hard):  difficulty += 0.2
+ * - rating === 3 (Good): difficulty -= 0.3
+ * - rating === 4 (Easy): difficulty -= 0.5
  * - Clamp to [1, 10]
  * 
  * @param array $state CardState
@@ -157,12 +158,17 @@ function fsrs_update_difficulty( $state, $event ) {
     $rating     = $event['rating'];
 
     if ( $rating === 1 ) {
+        // Again - forgot completely
         $difficulty += 0.6;
     } elseif ( $rating === 2 ) {
+        // Hard - remembered but difficult
         $difficulty += 0.2;
-    } else {
-        // rating === 3
+    } elseif ( $rating === 3 ) {
+        // Good - remembered well
         $difficulty -= 0.3;
+    } else {
+        // rating === 4 (Easy) - very easy
+        $difficulty -= 0.5;
     }
 
     return fsrs_clamp( $difficulty, 1.0, 10.0 );
@@ -178,9 +184,10 @@ function fsrs_update_difficulty( $state, $event ) {
  * Ref: Section 5.2 - Stability Update (BASE FSRS)
  * 
  * Rules:
- * - rating === 1: multiplier = 0.5
- * - rating === 2: multiplier = 1.2
- * - rating === 3: multiplier = 1.8
+ * - rating === 1 (Again): multiplier = 0.5
+ * - rating === 2 (Hard):  multiplier = 1.0
+ * - rating === 3 (Good): multiplier = 1.8
+ * - rating === 4 (Easy): multiplier = 2.5
  * - Apply difficulty scaling: (11 - difficulty) / 10
  * 
  * @param array $state         CardState
@@ -194,12 +201,17 @@ function fsrs_update_stability_base( $state, $event, $new_difficulty ) {
 
     // Determine base multiplier based on rating
     if ( $rating === 1 ) {
+        // Again - reset stability significantly
         $stability_multiplier = 0.5;
     } elseif ( $rating === 2 ) {
-        $stability_multiplier = 1.2;
-    } else {
-        // rating === 3
+        // Hard - small stability increase
+        $stability_multiplier = 1.0;
+    } elseif ( $rating === 3 ) {
+        // Good - good stability increase
         $stability_multiplier = 1.8;
+    } else {
+        // rating === 4 (Easy) - large stability increase
+        $stability_multiplier = 2.5;
     }
 
     // Apply rating multiplier
@@ -232,23 +244,25 @@ function fsrs_apply_modifiers_to_stability( $stability, $event ) {
     // 6.1 Response Time Modifier
     // Fast confident recall = stronger memory
     // Slow recall even if correct = weaker memory
-    if ( $event['response_time_ms'] < 2000 && $rating === 3 ) {
+    // Apply to Good (3) and Easy (4) ratings
+    if ( $event['response_time_ms'] < 2000 && ( $rating === 3 || $rating === 4 ) ) {
         $stability *= 1.15;
     }
-    if ( $event['response_time_ms'] > 7000 && $rating === 3 ) {
+    if ( $event['response_time_ms'] > 7000 && ( $rating === 3 || $rating === 4 ) ) {
         $stability *= 0.9;
     }
 
     // 6.2 Early / Late Review Modifier
     // If reviewed late and still remembered = stronger memory
     // If reviewed early and remembered = slightly weaker (overlearning penalty)
+    // Apply to Good (3) and Easy (4) ratings
     if ( $event['scheduled_interval'] > 0 ) {
         $lateness_ratio = $event['actual_interval'] / $event['scheduled_interval'];
         
-        if ( $lateness_ratio > 1.2 && $rating === 3 ) {
+        if ( $lateness_ratio > 1.2 && ( $rating === 3 || $rating === 4 ) ) {
             $stability *= 1.1;
         }
-        if ( $lateness_ratio < 0.8 && $rating === 3 ) {
+        if ( $lateness_ratio < 0.8 && ( $rating === 3 || $rating === 4 ) ) {
             $stability *= 0.95;
         }
     }
@@ -376,11 +390,11 @@ function fsrs_plusplus_review( $state, $event, $target_retention = 0.9, $max_int
     $new_consecutive_fails = $state['consecutive_fails'];
 
     if ( $event['rating'] === 1 ) {
-        // User forgot - increment both counters
+        // Again - user forgot, increment both counters
         $new_lapse_count++;
         $new_consecutive_fails++;
     } else {
-        // User remembered (rating 2 or 3) - reset consecutive fails
+        // Hard (2), Good (3), or Easy (4) - user remembered, reset consecutive fails
         $new_consecutive_fails = 0;
     }
 
