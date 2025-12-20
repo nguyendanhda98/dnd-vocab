@@ -34,6 +34,16 @@ function dnd_vocab_admin_menu() {
         'edit.php?post_type=dnd_deck'             // Menu slug (CPT list URL)
     );
 
+    // Submenu: FSRS Test
+    add_submenu_page(
+        'dnd-vocab',                              // Parent slug
+        __( 'FSRS Test', 'dnd-vocab' ),          // Page title
+        __( 'FSRS Test', 'dnd-vocab' ),          // Menu title
+        'manage_options',                          // Capability
+        'dnd-vocab-fsrs-test',                     // Menu slug
+        'dnd_vocab_fsrs_test_page'                // Callback function
+    );
+
     // Submenu: Settings
     add_submenu_page(
         'dnd-vocab',                              // Parent slug

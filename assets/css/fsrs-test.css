@@ -1,0 +1,304 @@
+/* FSRS Test Page Styles */
+
+.dnd-vocab-fsrs-test {
+	max-width: 1400px;
+}
+
+.dnd-vocab-fsrs-test-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin: 20px 0;
+}
+
+.dnd-vocab-fsrs-test-header h2 {
+	margin: 0;
+	font-size: 24px;
+}
+
+/* Metrics Cards */
+.dnd-vocab-fsrs-test-metrics {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+	gap: 20px;
+	margin: 30px 0;
+}
+
+.dnd-vocab-fsrs-test-metric-card {
+	background: #fff;
+	border: 1px solid #ccd0d4;
+	border-radius: 4px;
+	padding: 20px;
+	text-align: center;
+	box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+	transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.dnd-vocab-fsrs-test-metric-card:hover {
+	transform: translateY(-2px);
+	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.dnd-vocab-fsrs-test-metric-card[data-metric="stability"] {
+	border-left: 4px solid #2271b1;
+}
+
+.dnd-vocab-fsrs-test-metric-card[data-metric="difficulty"] {
+	border-left: 4px solid #d63638;
+}
+
+.dnd-vocab-fsrs-test-metric-card[data-metric="retrievability"] {
+	border-left: 4px solid #f0b849;
+}
+
+.dnd-vocab-fsrs-test-metric-card[data-metric="interval"] {
+	border-left: 4px solid #00a32a;
+}
+
+.dnd-vocab-fsrs-test-metric-label {
+	font-size: 14px;
+	color: #646970;
+	margin-bottom: 10px;
+	font-weight: 500;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+}
+
+.dnd-vocab-fsrs-test-metric-value {
+	font-size: 32px;
+	font-weight: 700;
+	color: #1d2327;
+	margin: 10px 0;
+	transition: color 0.3s, transform 0.3s;
+}
+
+.dnd-vocab-fsrs-test-metric-value.value-changed {
+	color: #2271b1;
+	transform: scale(1.1);
+}
+
+.dnd-vocab-fsrs-test-metric-unit {
+	font-size: 12px;
+	color: #8c8f94;
+}
+
+/* Rating Buttons */
+.dnd-vocab-fsrs-test-actions {
+	margin: 40px 0;
+}
+
+.dnd-vocab-fsrs-test-actions h3 {
+	margin-bottom: 20px;
+}
+
+.dnd-vocab-fsrs-test-rating-buttons {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+	gap: 15px;
+}
+
+.dnd-vocab-fsrs-test-rating-btn {
+	background: #fff;
+	border: 2px solid #ccd0d4;
+	border-radius: 4px;
+	padding: 20px;
+	cursor: pointer;
+	transition: all 0.2s;
+	text-align: center;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	font-size: 16px;
+}
+
+.dnd-vocab-fsrs-test-rating-btn:hover:not(:disabled) {
+	transform: translateY(-2px);
+	box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.dnd-vocab-fsrs-test-rating-btn:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+}
+
+.dnd-vocab-fsrs-test-rating-btn.processing {
+	opacity: 0.7;
+	cursor: wait;
+}
+
+.dnd-vocab-fsrs-test-rating-btn .rating-label {
+	font-weight: 700;
+	font-size: 18px;
+}
+
+.dnd-vocab-fsrs-test-rating-btn .rating-desc {
+	font-size: 13px;
+	color: #646970;
+}
+
+.dnd-vocab-fsrs-test-rating-btn .rating-interval {
+	font-size: 12px;
+	color: #2271b1;
+	font-weight: 600;
+	margin-top: 8px;
+	padding-top: 8px;
+	border-top: 1px solid #ccd0d4;
+	transition: color 0.3s, transform 0.3s;
+}
+
+.dnd-vocab-fsrs-test-rating-btn .rating-interval.interval-updated {
+	color: #00a32a;
+	transform: scale(1.05);
+}
+
+/* Rating button colors */
+.dnd-vocab-fsrs-test-rating-btn.rating-again {
+	border-color: #d63638;
+	background: #fcf0f1;
+}
+
+.dnd-vocab-fsrs-test-rating-btn.rating-again:hover:not(:disabled) {
+	background: #fce8e9;
+	border-color: #b32d2e;
+}
+
+.dnd-vocab-fsrs-test-rating-btn.rating-again .rating-label {
+	color: #d63638;
+}
+
+.dnd-vocab-fsrs-test-rating-btn.rating-hard {
+	border-color: #f0b849;
+	background: #fef9e7;
+}
+
+.dnd-vocab-fsrs-test-rating-btn.rating-hard:hover:not(:disabled) {
+	background: #fdf4d3;
+	border-color: #dba617;
+}
+
+.dnd-vocab-fsrs-test-rating-btn.rating-hard .rating-label {
+	color: #dba617;
+}
+
+.dnd-vocab-fsrs-test-rating-btn.rating-good {
+	border-color: #00a32a;
+	background: #f0f6f3;
+}
+
+.dnd-vocab-fsrs-test-rating-btn.rating-good:hover:not(:disabled) {
+	background: #e5f3ed;
+	border-color: #007017;
+}
+
+.dnd-vocab-fsrs-test-rating-btn.rating-good .rating-label {
+	color: #00a32a;
+}
+
+.dnd-vocab-fsrs-test-rating-btn.rating-easy {
+	border-color: #2271b1;
+	background: #f0f6fc;
+}
+
+.dnd-vocab-fsrs-test-rating-btn.rating-easy:hover:not(:disabled) {
+	background: #e5f0fa;
+	border-color: #135e96;
+}
+
+.dnd-vocab-fsrs-test-rating-btn.rating-easy .rating-label {
+	color: #2271b1;
+}
+
+/* Log Section */
+.dnd-vocab-fsrs-test-log {
+	margin: 40px 0;
+}
+
+.dnd-vocab-fsrs-test-log h3 {
+	margin-bottom: 20px;
+}
+
+.dnd-vocab-fsrs-test-log-empty {
+	padding: 40px;
+	text-align: center;
+	color: #646970;
+	background: #f6f7f7;
+	border-radius: 4px;
+}
+
+.dnd-vocab-fsrs-test-log-container {
+	overflow-x: auto;
+}
+
+.dnd-vocab-fsrs-test-log-container table {
+	margin-top: 0;
+}
+
+.dnd-vocab-fsrs-test-log-container .log-entry-new {
+	animation: slideIn 0.3s ease-out;
+	background: #f0f6fc;
+}
+
+@keyframes slideIn {
+	from {
+		opacity: 0;
+		transform: translateX(-20px);
+	}
+	to {
+		opacity: 1;
+		transform: translateX(0);
+	}
+}
+
+/* Rating badges in log */
+.rating-badge {
+	display: inline-block;
+	padding: 4px 12px;
+	border-radius: 12px;
+	font-size: 12px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+}
+
+.rating-badge.rating-again {
+	background: #fce8e9;
+	color: #d63638;
+}
+
+.rating-badge.rating-hard {
+	background: #fdf4d3;
+	color: #dba617;
+}
+
+.rating-badge.rating-good {
+	background: #e5f3ed;
+	color: #00a32a;
+}
+
+.rating-badge.rating-easy {
+	background: #e5f0fa;
+	color: #2271b1;
+}
+
+/* Responsive */
+@media (max-width: 782px) {
+	.dnd-vocab-fsrs-test-metrics {
+		grid-template-columns: 1fr;
+	}
+
+	.dnd-vocab-fsrs-test-rating-buttons {
+		grid-template-columns: 1fr;
+	}
+
+	.dnd-vocab-fsrs-test-header {
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 15px;
+	}
+
+	.dnd-vocab-fsrs-test-log-container {
+		overflow-x: scroll;
+	}
+}
+
