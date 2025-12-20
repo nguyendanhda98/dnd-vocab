@@ -1,15 +1,15 @@
 <?php
 /**
- * FSRS++ Algorithm Implementation
+ * FSRS Algorithm Implementation (Simplified)
  * 
- * An extension of the FSRS algorithm for spaced repetition.
+ * A simplified FSRS algorithm for spaced repetition.
  * Predicts when a user will forget an item based on observed recall behavior.
  * 
  * Core concepts:
  * - Uses memory stability (S) and difficulty (D) instead of ease factor
  * - Probabilistic scheduling based on forgetting curve
  * - Per-user, per-card memory state
- * - All modifiers are multiplicative
+ * - NO behavior modifiers (response time, time of day, etc.)
  * 
  * @package DND_Vocab
  * @since 1.0.0
@@ -44,19 +44,14 @@ function fsrs_create_initial_card_state() {
 /**
  * Create a ReviewEvent from observed behaviors.
  * 
- * All values must be observed passively, never asked from the user.
+ * Simplified version - only uses essential parameters for FSRS core.
  * 
- * @param int   $rating                   1=Again, 2=Hard, 3=Good, 4=Easy
- * @param float $elapsed_days             Days since last review
- * @param float $scheduled_interval       Originally scheduled interval (days)
- * @param float $actual_interval          Actual interval that passed (days)
- * @param int   $response_time_ms         Time to respond in milliseconds
- * @param int   $consecutive_fails        Current consecutive failure count
- * @param int   $lapse_count              Total lapse count
- * @param int   $review_hour              Hour of review (0-23)
- * @param float $review_consistency_score Consistency score (0-1)
- * @param bool  $skip_or_abort            Whether user skipped/aborted
- * @param float $improvement_trend        Trend indicator (-1 to +1)
+ * @param int   $rating             1=Again, 2=Hard, 3=Good, 4=Easy
+ * @param float $elapsed_days       Days since last review
+ * @param float $scheduled_interval Originally scheduled interval (days)
+ * @param float $actual_interval    Actual interval that passed (days)
+ * @param int   $consecutive_fails  Current consecutive failure count
+ * @param int   $lapse_count        Total lapse count
  * @return array ReviewEvent
  */
 function fsrs_create_review_event(
@@ -64,26 +59,16 @@ function fsrs_create_review_event(
     $elapsed_days,
     $scheduled_interval,
     $actual_interval,
-    $response_time_ms,
     $consecutive_fails,
-    $lapse_count,
-    $review_hour,
-    $review_consistency_score,
-    $skip_or_abort,
-    $improvement_trend
+    $lapse_count
 ) {
     return array(
-        'rating'                   => $rating,
-        'elapsed_days'             => $elapsed_days,
-        'scheduled_interval'       => $scheduled_interval,
-        'actual_interval'          => $actual_interval,
-        'response_time_ms'         => $response_time_ms,
-        'consecutive_fails'        => $consecutive_fails,
-        'lapse_count'              => $lapse_count,
-        'review_hour'              => $review_hour,
-        'review_consistency_score' => $review_consistency_score,
-        'skip_or_abort'            => $skip_or_abort,
-        'improvement_trend'        => $improvement_trend,
+        'rating'             => $rating,
+        'elapsed_days'       => $elapsed_days,
+        'scheduled_interval' => $scheduled_interval,
+        'actual_interval'    => $actual_interval,
+        'consecutive_fails'  => $consecutive_fails,
+        'lapse_count'        => $lapse_count,
     );
 }
 
@@ -104,23 +89,9 @@ function fsrs_clamp( $value, $min, $max ) {
 }
 
 /**
- * Linear interpolation between two values.
- * 
- * @param float $a Start value
- * @param float $b End value
- * @param float $t Interpolation factor (0-1)
- * @return float Interpolated value
- */
-function fsrs_lerp( $a, $b, $t ) {
-    return $a + ( $b - $a ) * $t;
-}
-
-/**
  * Compute retrievability using exponential forgetting curve.
  * 
  * Formula: R = exp(-elapsed_days / stability)
- * 
- * Ref: Section 4.3 - Forgetting Curve
  * 
  * @param float $elapsed_days Days since last review
  * @param float $stability    Current stability value
@@ -140,13 +111,11 @@ function fsrs_compute_retrievability( $elapsed_days, $stability ) {
 /**
  * Update difficulty based on rating.
  * 
- * Ref: Section 5.1 - Difficulty Update
- * 
  * Rules:
  * - rating === 1 (Again): difficulty += 0.6
  * - rating === 2 (Hard):  difficulty += 0.2
- * - rating === 3 (Good): difficulty -= 0.3
- * - rating === 4 (Easy): difficulty -= 0.5
+ * - rating === 3 (Good):  difficulty -= 0.3
+ * - rating === 4 (Easy):  difficulty -= 0.5
  * - Clamp to [1, 10]
  * 
  * @param array $state CardState
@@ -181,19 +150,17 @@ function fsrs_update_difficulty( $state, $event ) {
 /**
  * Update stability using base FSRS logic.
  * 
- * Ref: Section 5.2 - Stability Update (BASE FSRS)
- * 
  * Rules:
  * - rating === 1 (Again): multiplier = 0.5
  * - rating === 2 (Hard):  multiplier = 1.0
- * - rating === 3 (Good): multiplier = 1.8
- * - rating === 4 (Easy): multiplier = 2.5
+ * - rating === 3 (Good):  multiplier = 1.8
+ * - rating === 4 (Easy):  multiplier = 2.5
  * - Apply difficulty scaling: (11 - difficulty) / 10
  * 
- * @param array $state         CardState
- * @param array $event         ReviewEvent
+ * @param array $state          CardState
+ * @param array $event          ReviewEvent
  * @param float $new_difficulty Updated difficulty value
- * @return float Updated stability (before FSRS++ modifiers)
+ * @return float Updated stability
  */
 function fsrs_update_stability_base( $state, $event, $new_difficulty ) {
     $stability = $state['stability'];
@@ -224,96 +191,11 @@ function fsrs_update_stability_base( $state, $event, $new_difficulty ) {
 }
 
 /* ==========================================================================
-   SECTION 6: FSRS++ EXTENSIONS (BEHAVIOR MODIFIERS)
-   ========================================================================== */
-
-/**
- * Apply all FSRS++ behavior modifiers to stability.
- * 
- * All modifiers are multiplicative as per spec.
- * 
- * Ref: Section 6 - FSRS++ Extensions
- * 
- * @param float $stability Current stability after base update
- * @param array $event     ReviewEvent with all behavior signals
- * @return float Modified stability
- */
-function fsrs_apply_modifiers_to_stability( $stability, $event ) {
-    $rating = $event['rating'];
-
-    // 6.1 Response Time Modifier
-    // Fast confident recall = stronger memory
-    // Slow recall even if correct = weaker memory
-    // Apply to Good (3) and Easy (4) ratings
-    if ( $event['response_time_ms'] < 2000 && ( $rating === 3 || $rating === 4 ) ) {
-        $stability *= 1.15;
-    }
-    if ( $event['response_time_ms'] > 7000 && ( $rating === 3 || $rating === 4 ) ) {
-        $stability *= 0.9;
-    }
-
-    // 6.2 Early / Late Review Modifier
-    // If reviewed late and still remembered = stronger memory
-    // If reviewed early and remembered = slightly weaker (overlearning penalty)
-    // Apply to Good (3) and Easy (4) ratings
-    if ( $event['scheduled_interval'] > 0 ) {
-        $lateness_ratio = $event['actual_interval'] / $event['scheduled_interval'];
-        
-        if ( $lateness_ratio > 1.2 && ( $rating === 3 || $rating === 4 ) ) {
-            $stability *= 1.1;
-        }
-        if ( $lateness_ratio < 0.8 && ( $rating === 3 || $rating === 4 ) ) {
-            $stability *= 0.95;
-        }
-    }
-
-    // 6.3 Consecutive Fails Penalty
-    // Each consecutive fail compounds the penalty
-    $stability *= pow( 0.85, $event['consecutive_fails'] );
-
-    // 6.4 Lapse History Penalty
-    // More total lapses = harder card, slower stability growth
-    $stability *= 1.0 / ( 1.0 + 0.1 * $event['lapse_count'] );
-
-    // 6.5 Review Consistency Modifier
-    // Consistent reviewers get a bonus
-    $consistency_multiplier = fsrs_lerp( 0.9, 1.05, $event['review_consistency_score'] );
-    $stability *= $consistency_multiplier;
-
-    // 6.6 Skip / Abort Penalty
-    // Skipping or aborting indicates weak memory
-    if ( $event['skip_or_abort'] ) {
-        $stability *= 0.8;
-    }
-
-    // 6.7 Time-of-Day Adjustment (Light)
-    // Late night / early morning reviews are less reliable
-    $review_hour = $event['review_hour'];
-    if ( $review_hour >= 22 || $review_hour <= 5 ) {
-        $stability *= 0.95;
-    }
-
-    // 6.8 Improvement Trend Modifier
-    // Positive trend = user is getting better at this card
-    // Negative trend = user is struggling
-    if ( $event['improvement_trend'] > 0 ) {
-        $stability *= 1.1;
-    }
-    if ( $event['improvement_trend'] < 0 ) {
-        $stability *= 0.9;
-    }
-
-    return $stability;
-}
-
-/* ==========================================================================
    SECTION 7: NEXT INTERVAL CALCULATION
    ========================================================================== */
 
 /**
  * Compute the next review interval in days.
- * 
- * Ref: Section 7 - Next Interval Calculation
  * 
  * Formula: next_interval_days = -stability * ln(target_retention)
  * 
@@ -359,12 +241,11 @@ function fsrs_compute_next_review_time( $interval_days, $from_time = null ) {
 /**
  * Process a review event and return updated state.
  * 
- * This is the main entry point for the FSRS++ algorithm.
- * 
- * Ref: Section 9 - Output
+ * This is the main entry point for the FSRS algorithm.
+ * Used ONLY in Review Phase - NOT for learning/transition phases.
  * 
  * @param array $state            Current CardState for this (user × card)
- * @param array $event            ReviewEvent with all observed behaviors
+ * @param array $event            ReviewEvent with observed behaviors
  * @param float $target_retention Target retention probability (default 0.9)
  * @param float $max_interval     Maximum interval in days (default 3650)
  * @return array {
@@ -376,16 +257,13 @@ function fsrs_compute_next_review_time( $interval_days, $from_time = null ) {
  * }
  */
 function fsrs_plusplus_review( $state, $event, $target_retention = 0.9, $max_interval = 3650.0 ) {
-    // Step 1: Update difficulty (Section 5.1)
+    // Step 1: Update difficulty
     $new_difficulty = fsrs_update_difficulty( $state, $event );
 
-    // Step 2: Update stability using base FSRS (Section 5.2)
+    // Step 2: Update stability using base FSRS
     $new_stability = fsrs_update_stability_base( $state, $event, $new_difficulty );
 
-    // Step 3: Apply all FSRS++ behavior modifiers (Section 6)
-    $new_stability = fsrs_apply_modifiers_to_stability( $new_stability, $event );
-
-    // Step 4: Update lapse tracking based on rating
+    // Step 3: Update lapse tracking based on rating
     $new_lapse_count       = $state['lapse_count'];
     $new_consecutive_fails = $state['consecutive_fails'];
 
@@ -398,14 +276,14 @@ function fsrs_plusplus_review( $state, $event, $target_retention = 0.9, $max_int
         $new_consecutive_fails = 0;
     }
 
-    // Step 5: Compute next interval (Section 7)
+    // Step 4: Compute next interval
     $next_interval_days = fsrs_compute_next_interval_days(
         $new_stability,
         $target_retention,
         $max_interval
     );
 
-    // Step 6: Compute next review timestamp
+    // Step 5: Compute next review timestamp
     $next_review_time = fsrs_compute_next_review_time( $next_interval_days );
 
     // Build updated state
@@ -417,7 +295,7 @@ function fsrs_plusplus_review( $state, $event, $target_retention = 0.9, $max_int
         'consecutive_fails' => $new_consecutive_fails,
     );
 
-    // Return output as specified in Section 9
+    // Return output
     return array(
         'updated_stability'  => $new_stability,
         'updated_difficulty' => $new_difficulty,
