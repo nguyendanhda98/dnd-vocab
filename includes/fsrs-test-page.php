@@ -87,21 +87,71 @@ function dnd_vocab_fsrs_test_reset() {
 	dnd_vocab_fsrs_test_init_session();
 	unset( $_SESSION['dnd_vocab_fsrs_test_state'] );
 	unset( $_SESSION['dnd_vocab_fsrs_test_history'] );
+	unset( $_SESSION['dnd_vocab_fsrs_test_simulated_time'] );
+}
+
+/**
+ * Get simulated time from session
+ *
+ * @return int|null Simulated timestamp or null if not set
+ */
+function dnd_vocab_fsrs_test_get_simulated_time() {
+	dnd_vocab_fsrs_test_init_session();
+	if ( isset( $_SESSION['dnd_vocab_fsrs_test_simulated_time'] ) ) {
+		return intval( $_SESSION['dnd_vocab_fsrs_test_simulated_time'] );
+	}
+	return null;
+}
+
+/**
+ * Set simulated time in session
+ *
+ * @param int $timestamp Unix timestamp
+ */
+function dnd_vocab_fsrs_test_set_simulated_time( $timestamp ) {
+	dnd_vocab_fsrs_test_init_session();
+	$_SESSION['dnd_vocab_fsrs_test_simulated_time'] = intval( $timestamp );
+}
+
+/**
+ * Reset simulated time to null (use real time)
+ */
+function dnd_vocab_fsrs_test_reset_simulated_time() {
+	dnd_vocab_fsrs_test_init_session();
+	unset( $_SESSION['dnd_vocab_fsrs_test_simulated_time'] );
+}
+
+/**
+ * Get current time (simulated if set, otherwise real time)
+ *
+ * @return int Current timestamp
+ */
+function dnd_vocab_fsrs_test_get_current_time() {
+	$simulated = dnd_vocab_fsrs_test_get_simulated_time();
+	return $simulated !== null ? $simulated : current_time( 'timestamp' );
 }
 
 /**
  * Get current phase from test state
  *
+ * Two-phase system: NEW → REVIEW
+ *
  * @param array $state Current card state
- * @return string Phase constant (DND_VOCAB_PHASE_*)
+ * @return string Phase constant (DND_VOCAB_PHASE_NEW or DND_VOCAB_PHASE_REVIEW)
  */
 function dnd_vocab_fsrs_test_get_phase( $state ) {
 	// If phase is explicitly set, use it
 	if ( isset( $state['phase'] ) && ! empty( $state['phase'] ) ) {
 		$phase = $state['phase'];
-		// Validate phase
-		if ( in_array( $phase, array( DND_VOCAB_PHASE_NEW, DND_VOCAB_PHASE_LEARNING, DND_VOCAB_PHASE_TRANSITION, DND_VOCAB_PHASE_REVIEW ), true ) ) {
-			return $phase;
+		
+		// NEW phase
+		if ( DND_VOCAB_PHASE_NEW === $phase ) {
+			return DND_VOCAB_PHASE_NEW;
+		}
+		
+		// REVIEW phase (or legacy LEARNING/TRANSITION → treated as REVIEW)
+		if ( in_array( $phase, array( DND_VOCAB_PHASE_REVIEW, DND_VOCAB_PHASE_LEARNING, DND_VOCAB_PHASE_TRANSITION ), true ) ) {
+			return DND_VOCAB_PHASE_REVIEW;
 		}
 	}
 
@@ -111,17 +161,16 @@ function dnd_vocab_fsrs_test_get_phase( $state ) {
 		return DND_VOCAB_PHASE_NEW;
 	}
 
-	// If stability is meaningful (> 0.5), likely in REVIEW phase
-	if ( isset( $state['stability'] ) && (float) $state['stability'] > 0.5 ) {
-		return DND_VOCAB_PHASE_REVIEW;
-	}
-
-	// Default to LEARNING for cards with low stability
-	return DND_VOCAB_PHASE_LEARNING;
+	// If has any stability, it's in REVIEW
+	return DND_VOCAB_PHASE_REVIEW;
 }
 
 /**
  * Calculate predicted intervals based on current phase
+ *
+ * Two-phase system:
+ * - NEW: Hard-coded intervals (1m, 5m, 10m, 3d)
+ * - REVIEW: FSRS calculation with rating factors
  *
  * @param array $state Current card state
  * @param int   $now   Current timestamp
@@ -134,8 +183,8 @@ function dnd_vocab_fsrs_test_predict_intervals( $state, $now ) {
 	// Get predicted timestamps based on phase
 	$predicted_timestamps = array();
 	
-	if ( $phase === DND_VOCAB_PHASE_NEW || $phase === DND_VOCAB_PHASE_LEARNING ) {
-		// LEARNING PHASE: Use preset learning intervals
+	if ( $phase === DND_VOCAB_PHASE_NEW ) {
+		// NEW PHASE: Use preset hard-coded intervals
 		if ( function_exists( 'dnd_vocab_predict_learning_intervals' ) ) {
 			$predicted_timestamps = dnd_vocab_predict_learning_intervals( $now );
 		} else {
@@ -145,25 +194,11 @@ function dnd_vocab_fsrs_test_predict_intervals( $state, $now ) {
 				1 => $now + $intervals[1],  // Again: 1 minute
 				2 => $now + $intervals[2],  // Hard: 5 minutes
 				3 => $now + $intervals[3],  // Good: 10 minutes
-				4 => $now + $intervals[4],  // Easy: 2 days
-			);
-		}
-	} elseif ( $phase === DND_VOCAB_PHASE_TRANSITION ) {
-		// TRANSITION PHASE: Use preset transition intervals
-		if ( function_exists( 'dnd_vocab_predict_transition_intervals' ) ) {
-			$predicted_timestamps = dnd_vocab_predict_transition_intervals( $now );
-		} else {
-			// Fallback: use transition intervals directly
-			$intervals = dnd_vocab_get_transition_intervals();
-			$predicted_timestamps = array(
-				1 => $now + $intervals[1],  // Again: 5 minutes
-				2 => $now + $intervals[2],  // Hard: 30 minutes
-				3 => $now + $intervals[3],  // Good: 1 day
-				4 => $now + $intervals[4],  // Easy: 2 days
+				4 => $now + $intervals[4],  // Easy: 3 days
 			);
 		}
 	} else {
-		// REVIEW PHASE: Use FSRS calculation
+		// REVIEW PHASE: Use FSRS calculation for each rating independently
 		// Convert state to card format for dnd_vocab_predict_review_intervals
 		$card = array(
 			'stability' => $state['stability'],
@@ -220,7 +255,7 @@ function dnd_vocab_fsrs_test_predict_intervals( $state, $now ) {
  */
 function dnd_vocab_fsrs_test_calculate_predicted_interval( $state, $rating ) {
 	// Calculate elapsed days
-	$current_time = time();
+	$current_time = dnd_vocab_fsrs_test_get_current_time();
 	$last_review_time = $state['last_review_time'];
 	if ( $last_review_time > 1e12 ) {
 		$last_review_seconds = $last_review_time / 1000;
@@ -291,8 +326,8 @@ function dnd_vocab_fsrs_test_page() {
 	$history = dnd_vocab_fsrs_test_get_history();
 
 	// Calculate current retrievability
-	// Use current_time('timestamp') to match dnd_vocab_human_readable_next_review()
-	$current_time = current_time( 'timestamp' );
+	// Use simulated time if set, otherwise current_time('timestamp')
+	$current_time = dnd_vocab_fsrs_test_get_current_time();
 	$retrievability = 0;
 	if ( $state['last_review_time'] > 0 ) {
 		$last_review_seconds = $state['last_review_time'] > 1e12 ? $state['last_review_time'] / 1000 : $state['last_review_time'];
@@ -342,6 +377,13 @@ function dnd_vocab_fsrs_test_page() {
 		}
 	}
 
+	// Get simulated time status
+	$is_simulated = dnd_vocab_fsrs_test_get_simulated_time() !== null;
+	$current_time_display = dnd_vocab_fsrs_test_get_current_time();
+	$formatted_current_time = date_i18n( 'Y-m-d H:i:s', $current_time_display );
+	$real_time = current_time( 'timestamp' );
+	$formatted_real_time = date_i18n( 'Y-m-d H:i:s', $real_time );
+
 	// Localize script
 	wp_localize_script(
 		'dnd-vocab-fsrs-test',
@@ -349,6 +391,11 @@ function dnd_vocab_fsrs_test_page() {
 		array(
 			'ajaxUrl' => admin_url( 'admin-ajax.php' ),
 			'nonce'   => wp_create_nonce( 'dnd_vocab_fsrs_test_ajax' ),
+			'currentTime' => $current_time_display,
+			'formattedCurrentTime' => $formatted_current_time,
+			'isSimulated' => $is_simulated,
+			'realTime' => $real_time,
+			'formattedRealTime' => $formatted_real_time,
 			'i18n'    => array(
 				'loading'      => __( 'Processing...', 'dnd-vocab' ),
 				'error'        => __( 'An error occurred. Please try again.', 'dnd-vocab' ),
@@ -369,6 +416,54 @@ function dnd_vocab_fsrs_test_page() {
 			<button type="button" id="dnd-vocab-fsrs-test-reset" class="button">
 				<?php esc_html_e( 'Reset', 'dnd-vocab' ); ?>
 			</button>
+		</div>
+
+		<div class="dnd-vocab-fsrs-test-time-simulation">
+			<h3><?php esc_html_e( 'Time Simulation', 'dnd-vocab' ); ?></h3>
+			<p class="description">
+				<?php esc_html_e( 'Set a simulated time to test how the algorithm behaves at different review times. By default, the system uses the current real time.', 'dnd-vocab' ); ?>
+			</p>
+			<div class="dnd-vocab-fsrs-test-time-controls">
+				<div class="dnd-vocab-fsrs-test-time-display">
+					<label><?php esc_html_e( 'Current Time:', 'dnd-vocab' ); ?></label>
+					<span id="dnd-vocab-fsrs-test-current-time-display" class="time-value">
+						<?php echo esc_html( $formatted_current_time ); ?>
+					</span>
+					<?php if ( $is_simulated ) : ?>
+						<span class="simulated-badge"><?php esc_html_e( 'Simulated', 'dnd-vocab' ); ?></span>
+					<?php else : ?>
+						<span class="real-time-badge"><?php esc_html_e( 'Real Time', 'dnd-vocab' ); ?></span>
+					<?php endif; ?>
+				</div>
+				<div class="dnd-vocab-fsrs-test-time-inputs">
+					<div class="time-input-group">
+						<label for="dnd-vocab-fsrs-test-datetime-input"><?php esc_html_e( 'Set Date & Time:', 'dnd-vocab' ); ?></label>
+						<input 
+							type="datetime-local" 
+							id="dnd-vocab-fsrs-test-datetime-input" 
+							class="datetime-input"
+							value="<?php echo esc_attr( date( 'Y-m-d\TH:i', $current_time_display ) ); ?>"
+						/>
+						<button type="button" id="dnd-vocab-fsrs-test-set-time" class="button button-primary">
+							<?php esc_html_e( 'Set Time', 'dnd-vocab' ); ?>
+						</button>
+					</div>
+					<div class="time-quick-buttons">
+						<label><?php esc_html_e( 'Quick Add Days:', 'dnd-vocab' ); ?></label>
+						<button type="button" class="button add-days-btn" data-days="1">+1 <?php esc_html_e( 'Day', 'dnd-vocab' ); ?></button>
+						<button type="button" class="button add-days-btn" data-days="2">+2 <?php esc_html_e( 'Days', 'dnd-vocab' ); ?></button>
+						<button type="button" class="button add-days-btn" data-days="7">+7 <?php esc_html_e( 'Days', 'dnd-vocab' ); ?></button>
+						<button type="button" class="button add-days-btn" data-days="30">+30 <?php esc_html_e( 'Days', 'dnd-vocab' ); ?></button>
+					</div>
+					<?php if ( $is_simulated ) : ?>
+						<div class="time-reset">
+							<button type="button" id="dnd-vocab-fsrs-test-reset-time" class="button">
+								<?php esc_html_e( 'Reset to Real Time', 'dnd-vocab' ); ?>
+							</button>
+						</div>
+					<?php endif; ?>
+				</div>
+			</div>
 		</div>
 
 		<div class="dnd-vocab-fsrs-test-metrics">
@@ -538,8 +633,8 @@ function dnd_vocab_ajax_fsrs_test_review() {
 	$state = dnd_vocab_fsrs_test_get_state();
 
 	// Calculate elapsed days
-	// Use current_time('timestamp') to match dnd_vocab_human_readable_next_review()
-	$current_time = current_time( 'timestamp' );
+	// Use simulated time if set, otherwise current_time('timestamp')
+	$current_time = dnd_vocab_fsrs_test_get_current_time();
 	$last_review_time = $state['last_review_time'];
 	if ( $last_review_time > 1e12 ) {
 		$last_review_seconds = $last_review_time / 1000;
@@ -560,75 +655,33 @@ function dnd_vocab_ajax_fsrs_test_review() {
 		$retrievability_before = fsrs_compute_retrievability( $elapsed_days, $state['stability'] );
 	}
 
-	// Get current phase
+	// Get current phase (2-phase system: NEW or REVIEW)
 	$current_phase = dnd_vocab_fsrs_test_get_phase( $state );
 	$new_phase = $current_phase;
 	$new_state = $state;
 	$next_interval_days = 0;
 
 	// Process review based on phase
-	if ( $current_phase === DND_VOCAB_PHASE_NEW || $current_phase === DND_VOCAB_PHASE_LEARNING ) {
-		// LEARNING PHASE: Use preset intervals and update phase
+	if ( $current_phase === DND_VOCAB_PHASE_NEW ) {
+		// NEW PHASE: Use preset hard-coded intervals, then move to REVIEW
 		$intervals = dnd_vocab_get_learning_intervals();
 		$interval_seconds = isset( $intervals[ $rating ] ) ? $intervals[ $rating ] : $intervals[3];
 		$next_interval_days = $interval_seconds / DAY_IN_SECONDS;
 
-		if ( $rating === 4 ) {
-			// Easy: Skip directly to REVIEW phase
-			if ( function_exists( 'dnd_vocab_init_fsrs_state_for_review' ) ) {
-				$new_state = dnd_vocab_init_fsrs_state_for_review( $rating );
-				$new_state['last_review_time'] = $current_time * 1000;
-			}
-			$new_phase = DND_VOCAB_PHASE_REVIEW;
-		} elseif ( $rating === 3 ) {
-			// Good: Move to TRANSITION phase
+		// Initialize FSRS state for REVIEW phase (S₀ = 0.20, D₀ = 5.0)
+		if ( function_exists( 'dnd_vocab_init_fsrs_state_for_review' ) ) {
+			$new_state = dnd_vocab_init_fsrs_state_for_review( $rating );
 			$new_state['last_review_time'] = $current_time * 1000;
-			$new_state['stability'] = 0.5; // Placeholder for learning
-			$new_state['difficulty'] = 5.0;
-			$new_phase = DND_VOCAB_PHASE_TRANSITION;
-		} else {
-			// Again or Hard: Stay in LEARNING phase
-			$new_state['last_review_time'] = $current_time * 1000;
-			$new_state['stability'] = 0.5;
-			$new_state['difficulty'] = 5.0;
-			if ( $rating === 1 ) {
-				$new_state['consecutive_fails'] = isset( $new_state['consecutive_fails'] ) ? $new_state['consecutive_fails'] + 1 : 1;
-			}
-			$new_phase = DND_VOCAB_PHASE_LEARNING;
 		}
-	} elseif ( $current_phase === DND_VOCAB_PHASE_TRANSITION ) {
-		// TRANSITION PHASE: Use preset intervals and update phase
-		$intervals = dnd_vocab_get_transition_intervals();
-		$interval_seconds = isset( $intervals[ $rating ] ) ? $intervals[ $rating ] : $intervals[3];
-		$next_interval_days = $interval_seconds / DAY_IN_SECONDS;
 
-		if ( $rating === 3 || $rating === 4 ) {
-			// Good or Easy: Graduate to REVIEW phase
-			if ( function_exists( 'dnd_vocab_init_fsrs_state_for_review' ) ) {
-				$new_state = dnd_vocab_init_fsrs_state_for_review( $rating );
-				$new_state['last_review_time'] = $current_time * 1000;
-				// Carry over lapse counts
-				if ( isset( $state['lapse_count'] ) ) {
-					$new_state['lapse_count'] = $state['lapse_count'];
-				}
-				$new_state['consecutive_fails'] = 0; // Reset on graduation
-			}
-			$new_phase = DND_VOCAB_PHASE_REVIEW;
-		} elseif ( $rating === 1 ) {
-			// Again: Back to LEARNING phase
-			$intervals_learning = dnd_vocab_get_learning_intervals();
-			$next_interval_days = $intervals_learning[1] / DAY_IN_SECONDS;
-			$new_state['last_review_time'] = $current_time * 1000;
-			$new_state['stability'] = 0.5;
-			$new_state['difficulty'] = 5.0;
-			$new_state['lapse_count'] = isset( $state['lapse_count'] ) ? $state['lapse_count'] + 1 : 1;
-			$new_state['consecutive_fails'] = isset( $state['consecutive_fails'] ) ? $state['consecutive_fails'] + 1 : 1;
-			$new_phase = DND_VOCAB_PHASE_LEARNING;
-		} else {
-			// Hard: Stay in TRANSITION phase
-			$new_state['last_review_time'] = $current_time * 1000;
-			$new_phase = DND_VOCAB_PHASE_TRANSITION;
+		// Track lapse count for Again rating
+		if ( $rating === 1 ) {
+			$new_state['lapse_count'] = 1;
+			$new_state['consecutive_fails'] = 1;
 		}
+
+		// All ratings move directly to REVIEW phase after first review
+		$new_phase = DND_VOCAB_PHASE_REVIEW;
 	} else {
 		// REVIEW PHASE: Use FSRS calculation
 		// Get scheduled interval
@@ -746,8 +799,8 @@ function dnd_vocab_ajax_fsrs_test_reset() {
 	$initial_state['phase'] = DND_VOCAB_PHASE_NEW;
 
 	// For initial state, use learning intervals (same as study page)
-	// Use current_time('timestamp') to match dnd_vocab_human_readable_next_review()
-	$current_time = current_time( 'timestamp' );
+	// Use simulated time if set, otherwise current_time('timestamp')
+	$current_time = dnd_vocab_fsrs_test_get_current_time();
 	$predicted_intervals = array();
 	$predicted_intervals_formatted = array();
 	
@@ -768,4 +821,57 @@ function dnd_vocab_ajax_fsrs_test_reset() {
 	);
 }
 add_action( 'wp_ajax_dnd_vocab_fsrs_test_reset', 'dnd_vocab_ajax_fsrs_test_reset' );
+
+/**
+ * AJAX handler for setting simulated time
+ */
+function dnd_vocab_ajax_fsrs_test_set_time() {
+	check_ajax_referer( 'dnd_vocab_fsrs_test_ajax', 'nonce' );
+
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( array( 'message' => __( 'Insufficient permissions.', 'dnd-vocab' ) ) );
+	}
+
+	$simulated_time = null;
+	$add_days = null;
+
+	// Check if setting a specific timestamp
+	if ( isset( $_POST['simulated_time'] ) && ! empty( $_POST['simulated_time'] ) ) {
+		$simulated_time = intval( $_POST['simulated_time'] );
+		if ( $simulated_time <= 0 ) {
+			wp_send_json_error( array( 'message' => __( 'Invalid timestamp.', 'dnd-vocab' ) ) );
+		}
+		dnd_vocab_fsrs_test_set_simulated_time( $simulated_time );
+	} elseif ( isset( $_POST['add_days'] ) ) {
+		// Add days to current simulated time (or real time if not set)
+		$add_days = floatval( $_POST['add_days'] );
+		$current_simulated = dnd_vocab_fsrs_test_get_simulated_time();
+		$base_time = $current_simulated !== null ? $current_simulated : current_time( 'timestamp' );
+		$new_time = $base_time + ( $add_days * DAY_IN_SECONDS );
+		dnd_vocab_fsrs_test_set_simulated_time( $new_time );
+		$simulated_time = $new_time;
+	} elseif ( isset( $_POST['reset_time'] ) && $_POST['reset_time'] === '1' ) {
+		// Reset to real time
+		dnd_vocab_fsrs_test_reset_simulated_time();
+		$simulated_time = null;
+	} else {
+		wp_send_json_error( array( 'message' => __( 'Invalid request.', 'dnd-vocab' ) ) );
+	}
+
+	// Get current time (simulated or real)
+	$current_time = dnd_vocab_fsrs_test_get_current_time();
+	$is_simulated = dnd_vocab_fsrs_test_get_simulated_time() !== null;
+
+	// Format time for display
+	$formatted_time = date_i18n( 'Y-m-d H:i:s', $current_time );
+
+	wp_send_json_success(
+		array(
+			'current_time'     => $current_time,
+			'formatted_time'   => $formatted_time,
+			'is_simulated'     => $is_simulated,
+		)
+	);
+}
+add_action( 'wp_ajax_dnd_vocab_fsrs_test_set_time', 'dnd_vocab_ajax_fsrs_test_set_time' );
 

@@ -281,6 +281,123 @@
 	color: #2271b1;
 }
 
+/* Time Simulation Section */
+.dnd-vocab-fsrs-test-time-simulation {
+	background: #fff;
+	border: 1px solid #ccd0d4;
+	border-radius: 4px;
+	padding: 20px;
+	margin: 20px 0;
+	box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+
+.dnd-vocab-fsrs-test-time-simulation h3 {
+	margin-top: 0;
+	margin-bottom: 10px;
+}
+
+.dnd-vocab-fsrs-test-time-simulation .description {
+	margin-bottom: 20px;
+	color: #646970;
+	font-size: 14px;
+}
+
+.dnd-vocab-fsrs-test-time-controls {
+	display: flex;
+	flex-direction: column;
+	gap: 20px;
+}
+
+.dnd-vocab-fsrs-test-time-display {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 15px;
+	background: #f6f7f7;
+	border-radius: 4px;
+}
+
+.dnd-vocab-fsrs-test-time-display label {
+	font-weight: 600;
+	color: #1d2327;
+}
+
+.dnd-vocab-fsrs-test-time-display .time-value {
+	font-size: 16px;
+	font-weight: 600;
+	color: #2271b1;
+	font-family: monospace;
+}
+
+.dnd-vocab-fsrs-test-time-display .simulated-badge {
+	display: inline-block;
+	padding: 4px 12px;
+	background: #f0b849;
+	color: #1d2327;
+	border-radius: 12px;
+	font-size: 12px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+}
+
+.dnd-vocab-fsrs-test-time-display .real-time-badge {
+	display: inline-block;
+	padding: 4px 12px;
+	background: #e5f3ed;
+	color: #00a32a;
+	border-radius: 12px;
+	font-size: 12px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+}
+
+.dnd-vocab-fsrs-test-time-inputs {
+	display: flex;
+	flex-direction: column;
+	gap: 15px;
+}
+
+.dnd-vocab-fsrs-test-time-inputs .time-input-group {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+
+.dnd-vocab-fsrs-test-time-inputs .time-input-group label {
+	font-weight: 500;
+	min-width: 120px;
+}
+
+.dnd-vocab-fsrs-test-time-inputs .datetime-input {
+	padding: 8px 12px;
+	border: 1px solid #8c8f94;
+	border-radius: 4px;
+	font-size: 14px;
+}
+
+.dnd-vocab-fsrs-test-time-inputs .time-quick-buttons {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+
+.dnd-vocab-fsrs-test-time-inputs .time-quick-buttons label {
+	font-weight: 500;
+	min-width: 120px;
+}
+
+.dnd-vocab-fsrs-test-time-inputs .add-days-btn {
+	min-width: 80px;
+}
+
+.dnd-vocab-fsrs-test-time-inputs .time-reset {
+	margin-top: 5px;
+}
+
 /* Responsive */
 @media (max-width: 782px) {
 	.dnd-vocab-fsrs-test-metrics {
@@ -299,6 +416,22 @@
 
 	.dnd-vocab-fsrs-test-log-container {
 		overflow-x: scroll;
+	}
+
+	.dnd-vocab-fsrs-test-time-inputs .time-input-group,
+	.dnd-vocab-fsrs-test-time-inputs .time-quick-buttons {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	.dnd-vocab-fsrs-test-time-inputs .time-input-group label,
+	.dnd-vocab-fsrs-test-time-inputs .time-quick-buttons label {
+		min-width: auto;
+		width: 100%;
+	}
+
+	.dnd-vocab-fsrs-test-time-inputs .datetime-input {
+		width: 100%;
 	}
 }
 

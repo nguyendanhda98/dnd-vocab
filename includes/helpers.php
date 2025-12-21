@@ -363,34 +363,34 @@ function dnd_vocab_get_learning_intervals() {
 		1 => 1 * MINUTE_IN_SECONDS,   // Again: 1 minute
 		2 => 5 * MINUTE_IN_SECONDS,   // Hard: 5 minutes
 		3 => 10 * MINUTE_IN_SECONDS,  // Good: 10 minutes
-		4 => 2 * DAY_IN_SECONDS,      // Easy: 2 days (skip to review)
+		4 => 3 * DAY_IN_SECONDS,      // Easy: 3 days (skip to review)
 	);
 }
 
 /**
  * Get preset intervals for TRANSITION phase.
  * 
- * These are fixed intervals (in seconds) for cards that passed initial learning.
- * After Good/Easy in transition, card moves to REVIEW phase.
+ * @deprecated 1.1.0 TRANSITION phase has been removed. Cards now go directly from NEW to REVIEW.
+ *                   This function is kept for backward compatibility only.
  * 
  * @return array Mapping of rating => interval in seconds
  */
 function dnd_vocab_get_transition_intervals() {
-	return array(
-		1 => 5 * MINUTE_IN_SECONDS,   // Again: 5 minutes
-		2 => 30 * MINUTE_IN_SECONDS,  // Hard: 30 minutes
-		3 => 1 * DAY_IN_SECONDS,      // Good: 1 day (graduates to review)
-		4 => 2 * DAY_IN_SECONDS,      // Easy: 2 days (graduates to review)
-	);
+	_doing_it_wrong( __FUNCTION__, 'TRANSITION phase has been removed. Use dnd_vocab_get_learning_intervals() instead.', '1.1.0' );
+	// Return learning intervals as fallback
+	return dnd_vocab_get_learning_intervals();
 }
 
 /**
  * Get card phase from card data.
  * 
  * Determines the current phase of a card based on its state.
+ * Two-phase system: NEW → REVIEW
+ * 
+ * Legacy TRANSITION and LEARNING cards are automatically migrated to REVIEW.
  * 
  * @param array|null $card Card data or null for new card.
- * @return string Phase constant (DND_VOCAB_PHASE_*)
+ * @return string Phase constant (DND_VOCAB_PHASE_NEW or DND_VOCAB_PHASE_REVIEW)
  */
 function dnd_vocab_get_card_phase( $card ) {
 	// Null or empty card = new card
@@ -401,37 +401,36 @@ function dnd_vocab_get_card_phase( $card ) {
 	// If card has explicit phase field, use it
 	if ( isset( $card['phase'] ) && ! empty( $card['phase'] ) ) {
 		$phase = $card['phase'];
-		// Validate phase
-		if ( in_array( $phase, array( DND_VOCAB_PHASE_NEW, DND_VOCAB_PHASE_LEARNING, DND_VOCAB_PHASE_TRANSITION, DND_VOCAB_PHASE_REVIEW ), true ) ) {
-			return $phase;
+		
+		// NEW phase
+		if ( DND_VOCAB_PHASE_NEW === $phase ) {
+			return DND_VOCAB_PHASE_NEW;
+		}
+		
+		// REVIEW phase (or legacy LEARNING/TRANSITION → treated as REVIEW)
+		if ( in_array( $phase, array( DND_VOCAB_PHASE_REVIEW, DND_VOCAB_PHASE_LEARNING, DND_VOCAB_PHASE_TRANSITION ), true ) ) {
+			return DND_VOCAB_PHASE_REVIEW;
 		}
 	}
 
-	// Legacy card migration: determine phase from old fields
-	// If card has stability field and meaningful value, it's in review
-	if ( isset( $card['stability'] ) && (float) $card['stability'] > 0.5 ) {
-		// Check if it was migrated from old SM-2 system
-		if ( isset( $card['interval'] ) && (int) $card['interval'] >= 1 ) {
-			return DND_VOCAB_PHASE_REVIEW;
-		}
+	// Legacy card migration: check for any review history
+	// If card has last_review or stability, it has been reviewed → REVIEW phase
+	if ( isset( $card['last_review'] ) || isset( $card['last_review_time'] ) ) {
+		return DND_VOCAB_PHASE_REVIEW;
 	}
 
 	// Check old status field for backward compatibility
 	if ( isset( $card['status'] ) ) {
 		$status = $card['status'];
-		if ( 'review' === $status ) {
-			return DND_VOCAB_PHASE_REVIEW;
-		}
-		if ( 'learning' === $status ) {
-			return DND_VOCAB_PHASE_LEARNING;
-		}
 		if ( 'new' === $status ) {
 			return DND_VOCAB_PHASE_NEW;
 		}
+		// Any other status (review, learning, transition) → REVIEW
+		return DND_VOCAB_PHASE_REVIEW;
 	}
 
-	// Default: if has any review history, assume review phase
-	if ( isset( $card['last_review'] ) || isset( $card['last_review_time'] ) ) {
+	// If card has stability field, it has been processed → REVIEW
+	if ( isset( $card['stability'] ) && (float) $card['stability'] > 0 ) {
 		return DND_VOCAB_PHASE_REVIEW;
 	}
 
@@ -441,28 +440,18 @@ function dnd_vocab_get_card_phase( $card ) {
 /**
  * Initialize FSRS state when entering review phase.
  * 
- * Called when card graduates from transition to review phase.
- * Sets initial FSRS values based on the graduation rating.
+ * Called when card moves from NEW phase to REVIEW phase after first review.
+ * Uses fixed initial values: S₀ = 0.20 days, D₀ = 5.0
  * 
- * @param int $rating The rating that triggered graduation (3=Good, 4=Easy)
+ * @param int $rating The rating from the first review (1-4)
  * @return array Initial FSRS CardState
  */
 function dnd_vocab_init_fsrs_state_for_review( $rating ) {
-	if ( $rating === 4 ) {
-		// Easy: higher initial stability, lower difficulty
-		return array(
-			'stability'         => 2.0,
-			'difficulty'        => 4.5,
-			'last_review_time'  => time() * 1000,
-			'lapse_count'       => 0,
-			'consecutive_fails' => 0,
-		);
-	}
-
-	// Good (default): standard initial values
+	// All ratings start with the same initial stability and difficulty
+	// S₀ = 0.20 days, D₀ = 5.0 (as per FSRS-style spec)
 	return array(
-		'stability'         => 1.0,
-		'difficulty'        => 4.8,
+		'stability'         => 0.20,
+		'difficulty'        => 5.0,
 		'last_review_time'  => time() * 1000,
 		'lapse_count'       => 0,
 		'consecutive_fails' => 0,
@@ -637,18 +626,15 @@ function dnd_vocab_srs_apply_answer( $user_id, $vocab_id, $deck_id, $rating ) {
 
     $existing_card = isset( $data[ $vocab_id ] ) && is_array( $data[ $vocab_id ] ) ? $data[ $vocab_id ] : null;
 
-    // Determine current phase
+    // Determine current phase (only NEW or REVIEW now)
     $current_phase = dnd_vocab_get_card_phase( $existing_card );
 
-    // Process based on phase
+    // Process based on phase (2-phase system: NEW → REVIEW)
     if ( $current_phase === DND_VOCAB_PHASE_NEW || $current_phase === DND_VOCAB_PHASE_LEARNING ) {
-        // NEW/LEARNING PHASE: Use preset intervals
+        // NEW/LEARNING PHASE: Use preset intervals, then move to REVIEW
         $card = dnd_vocab_apply_learning_phase( $existing_card, $deck_id, $rating, $now );
-    } elseif ( $current_phase === DND_VOCAB_PHASE_TRANSITION ) {
-        // TRANSITION PHASE: Use transition presets
-        $card = dnd_vocab_apply_transition_phase( $existing_card, $deck_id, $rating, $now );
     } else {
-        // REVIEW PHASE: Use FSRS
+        // REVIEW PHASE: Use FSRS (includes legacy TRANSITION cards)
         $card = dnd_vocab_apply_review_phase( $existing_card, $deck_id, $rating, $now );
     }
 
@@ -664,7 +650,14 @@ function dnd_vocab_srs_apply_answer( $user_id, $vocab_id, $deck_id, $rating ) {
 /**
  * Apply learning phase logic (NEW/LEARNING).
  *
- * Uses preset intervals. Moves to TRANSITION after Good, directly to REVIEW after Easy.
+ * Phase 1 (NEW): Uses preset hard-coded intervals for first review only.
+ * After ANY rating, card moves directly to Phase 2 (REVIEW) with initial FSRS state.
+ * 
+ * Intervals:
+ * - Again: 1 minute
+ * - Hard: 5 minutes
+ * - Good: 10 minutes
+ * - Easy: 3 days
  *
  * @param array|null $card    Existing card or null
  * @param int        $deck_id Deck ID
@@ -675,60 +668,26 @@ function dnd_vocab_srs_apply_answer( $user_id, $vocab_id, $deck_id, $rating ) {
 function dnd_vocab_apply_learning_phase( $card, $deck_id, $rating, $now ) {
     $intervals = dnd_vocab_get_learning_intervals();
     $interval_seconds = isset( $intervals[ $rating ] ) ? $intervals[ $rating ] : $intervals[3];
+    $due_time = $now + $interval_seconds;
 
-    // Determine next phase based on rating
-    if ( $rating === 4 ) {
-        // Easy: Skip directly to REVIEW phase
-        $fsrs_state = dnd_vocab_init_fsrs_state_for_review( $rating );
-        $due_time = $now + $interval_seconds;
-        return dnd_vocab_fsrs_save_card_state( $fsrs_state, $deck_id, $due_time, DND_VOCAB_PHASE_REVIEW );
-    } elseif ( $rating === 3 ) {
-        // Good: Move to TRANSITION phase
-        $due_time = $now + $interval_seconds;
-        return array(
-            'phase'             => DND_VOCAB_PHASE_TRANSITION,
-            'deck_id'           => (int) $deck_id,
-            'due'               => $due_time,
-            'last_review'       => $now,
-            'last_review_time'  => $now * 1000,
-            'stability'         => 0.5, // Placeholder for learning
-            'difficulty'        => 5.0,
-            'lapse_count'       => 0,
-            'consecutive_fails' => 0,
-            'interval'          => 0, // Learning interval, not day-based
-            'status'            => DND_VOCAB_PHASE_TRANSITION,
-        );
-    } else {
-        // Again or Hard: Stay in LEARNING phase
-        $due_time = $now + $interval_seconds;
-        $consecutive_fails = 0;
-        if ( is_array( $card ) && isset( $card['consecutive_fails'] ) ) {
-            $consecutive_fails = (int) $card['consecutive_fails'];
-        }
-        if ( $rating === 1 ) {
-            $consecutive_fails++;
-        }
-        
-        return array(
-            'phase'             => DND_VOCAB_PHASE_LEARNING,
-            'deck_id'           => (int) $deck_id,
-            'due'               => $due_time,
-            'last_review'       => $now,
-            'last_review_time'  => $now * 1000,
-            'stability'         => 0.5,
-            'difficulty'        => 5.0,
-            'lapse_count'       => 0,
-            'consecutive_fails' => $consecutive_fails,
-            'interval'          => 0,
-            'status'            => DND_VOCAB_PHASE_LEARNING,
-        );
+    // Initialize FSRS state for REVIEW phase (S₀ = 0.20, D₀ = 5.0)
+    $fsrs_state = dnd_vocab_init_fsrs_state_for_review( $rating );
+
+    // Track lapse count for Again rating
+    if ( $rating === 1 ) {
+        $fsrs_state['lapse_count'] = 1;
+        $fsrs_state['consecutive_fails'] = 1;
     }
+
+    // All ratings move directly to REVIEW phase after first review
+    return dnd_vocab_fsrs_save_card_state( $fsrs_state, $deck_id, $due_time, DND_VOCAB_PHASE_REVIEW );
 }
 
 /**
  * Apply transition phase logic.
  *
- * Uses transition presets. Graduates to REVIEW on Good/Easy.
+ * @deprecated 1.1.0 TRANSITION phase has been removed. Cards now go directly from NEW to REVIEW.
+ *                   This function is kept for backward compatibility only.
  *
  * @param array|null $card    Existing card
  * @param int        $deck_id Deck ID
@@ -737,55 +696,9 @@ function dnd_vocab_apply_learning_phase( $card, $deck_id, $rating, $now ) {
  * @return array Updated card
  */
 function dnd_vocab_apply_transition_phase( $card, $deck_id, $rating, $now ) {
-    $intervals = dnd_vocab_get_transition_intervals();
-    $interval_seconds = isset( $intervals[ $rating ] ) ? $intervals[ $rating ] : $intervals[3];
-
-    // Get existing lapse/fail counts
-    $lapse_count = is_array( $card ) && isset( $card['lapse_count'] ) ? (int) $card['lapse_count'] : 0;
-    $consecutive_fails = is_array( $card ) && isset( $card['consecutive_fails'] ) ? (int) $card['consecutive_fails'] : 0;
-
-    if ( $rating === 3 || $rating === 4 ) {
-        // Good or Easy: Graduate to REVIEW phase
-        $fsrs_state = dnd_vocab_init_fsrs_state_for_review( $rating );
-        // Carry over lapse counts
-        $fsrs_state['lapse_count'] = $lapse_count;
-        $fsrs_state['consecutive_fails'] = 0; // Reset on graduation
-        $due_time = $now + $interval_seconds;
-        return dnd_vocab_fsrs_save_card_state( $fsrs_state, $deck_id, $due_time, DND_VOCAB_PHASE_REVIEW );
-    } elseif ( $rating === 1 ) {
-        // Again: Back to LEARNING phase with incremented fail count
-        $intervals_learning = dnd_vocab_get_learning_intervals();
-        $due_time = $now + $intervals_learning[1]; // 1 minute
-        return array(
-            'phase'             => DND_VOCAB_PHASE_LEARNING,
-            'deck_id'           => (int) $deck_id,
-            'due'               => $due_time,
-            'last_review'       => $now,
-            'last_review_time'  => $now * 1000,
-            'stability'         => 0.5,
-            'difficulty'        => 5.0,
-            'lapse_count'       => $lapse_count + 1,
-            'consecutive_fails' => $consecutive_fails + 1,
-            'interval'          => 0,
-            'status'            => DND_VOCAB_PHASE_LEARNING,
-        );
-    } else {
-        // Hard: Stay in TRANSITION phase
-        $due_time = $now + $interval_seconds;
-        return array(
-            'phase'             => DND_VOCAB_PHASE_TRANSITION,
-            'deck_id'           => (int) $deck_id,
-            'due'               => $due_time,
-            'last_review'       => $now,
-            'last_review_time'  => $now * 1000,
-            'stability'         => 0.5,
-            'difficulty'        => 5.0,
-            'lapse_count'       => $lapse_count,
-            'consecutive_fails' => $consecutive_fails,
-            'interval'          => 0,
-            'status'            => DND_VOCAB_PHASE_TRANSITION,
-        );
-    }
+    _doing_it_wrong( __FUNCTION__, 'TRANSITION phase has been removed. Use dnd_vocab_apply_review_phase() instead.', '1.1.0' );
+    // Treat as review phase for backward compatibility
+    return dnd_vocab_apply_review_phase( $card, $deck_id, $rating, $now );
 }
 
 /**
@@ -989,24 +902,21 @@ function dnd_vocab_srs_predict_next_reviews( $user_id, $vocab_id, $deck_id ) {
 
 	$now = current_time( 'timestamp' );
 
-	// Determine current phase
+	// Determine current phase (2-phase system: NEW or REVIEW)
 	$current_phase = dnd_vocab_get_card_phase( $card );
 
 	// Return intervals based on phase
-	if ( $current_phase === DND_VOCAB_PHASE_NEW || $current_phase === DND_VOCAB_PHASE_LEARNING ) {
-		// LEARNING PHASE: Return preset intervals
+	if ( $current_phase === DND_VOCAB_PHASE_NEW ) {
+		// NEW PHASE: Return preset hard-coded intervals
 		return dnd_vocab_predict_learning_intervals( $now );
-	} elseif ( $current_phase === DND_VOCAB_PHASE_TRANSITION ) {
-		// TRANSITION PHASE: Return transition presets
-		return dnd_vocab_predict_transition_intervals( $now );
 	} else {
-		// REVIEW PHASE: Use FSRS
+		// REVIEW PHASE: Use FSRS calculation for each rating
 		return dnd_vocab_predict_review_intervals( $card, $now );
 	}
 }
 
 /**
- * Predict intervals for LEARNING phase.
+ * Predict intervals for NEW phase (Phase 1 - hard-coded intervals).
  *
  * @param int $now Current timestamp
  * @return array Mapping of rating => timestamp
@@ -1017,35 +927,37 @@ function dnd_vocab_predict_learning_intervals( $now ) {
 		1 => $now + $intervals[1],  // Again: 1 minute
 		2 => $now + $intervals[2],  // Hard: 5 minutes
 		3 => $now + $intervals[3],  // Good: 10 minutes
-		4 => $now + $intervals[4],  // Easy: 2 days
+		4 => $now + $intervals[4],  // Easy: 3 days
 	);
 }
 
 /**
  * Predict intervals for TRANSITION phase.
  *
+ * @deprecated 1.1.0 TRANSITION phase has been removed. Use dnd_vocab_predict_review_intervals() instead.
+ *
  * @param int $now Current timestamp
  * @return array Mapping of rating => timestamp
  */
 function dnd_vocab_predict_transition_intervals( $now ) {
-	$intervals = dnd_vocab_get_transition_intervals();
-	return array(
-		1 => $now + $intervals[1],  // Again: 5 minutes
-		2 => $now + $intervals[2],  // Hard: 30 minutes
-		3 => $now + $intervals[3],  // Good: 1 day
-		4 => $now + $intervals[4],  // Easy: 2 days
-	);
+	_doing_it_wrong( __FUNCTION__, 'TRANSITION phase has been removed. Use dnd_vocab_predict_learning_intervals() instead.', '1.1.0' );
+	return dnd_vocab_predict_learning_intervals( $now );
 }
 
 /**
  * Predict intervals for REVIEW phase using FSRS.
  *
- * For review phase:
- * - Calculate base interval X from FSRS (Good rating)
- * - Again: relearn (5-10 minutes)
- * - Hard: X × 0.5 (min 1 day)
- * - Good: X
- * - Easy: X × 2
+ * Phase 2 (REVIEW): Calculate each rating independently using FSRS formula.
+ * 
+ * Formula for each rating:
+ * - S_new = S_old × r_factor
+ * - I_next = -S_new × ln(0.9)
+ * 
+ * Rating factors (r_factor):
+ * - Again: 0.30
+ * - Hard:  1.20
+ * - Good:  2.00
+ * - Easy:  3.50
  *
  * @param array|null $card Existing card
  * @param int        $now  Current timestamp
@@ -1057,32 +969,26 @@ function dnd_vocab_predict_review_intervals( $card, $now ) {
 	// Get FSRS state
 	$fsrs_state = dnd_vocab_fsrs_get_card_state( $card );
 
-	// Calculate base interval (for Good rating) using FSRS
-	$base_interval_days = dnd_vocab_calculate_fsrs_interval( $fsrs_state, 3, $now, $card );
-
-	// Ensure minimum interval of 1 day for review phase
-	$base_interval_days = max( 1.0, $base_interval_days );
-
-	// Again: Relearn interval (5 minutes)
-	$relearn_seconds = 5 * MINUTE_IN_SECONDS;
-	$result[1] = $now + $relearn_seconds;
-
-	// Hard: X × 0.5 (min 1 day)
-	$hard_days = max( 1.0, $base_interval_days * 0.5 );
-	$result[2] = $now + (int) ( $hard_days * DAY_IN_SECONDS );
-
-	// Good: X (base interval)
-	$result[3] = $now + (int) ( $base_interval_days * DAY_IN_SECONDS );
-
-	// Easy: X × 2
-	$easy_days = $base_interval_days * 2.0;
-	$result[4] = $now + (int) ( $easy_days * DAY_IN_SECONDS );
+	// Calculate interval for each rating independently
+	for ( $rating = 1; $rating <= 4; $rating++ ) {
+		$interval_days = dnd_vocab_calculate_fsrs_interval( $fsrs_state, $rating, $now, $card );
+		$interval_seconds = $interval_days * DAY_IN_SECONDS;
+		$result[ $rating ] = $now + (int) $interval_seconds;
+	}
 
 	return $result;
 }
 
 /**
  * Calculate FSRS interval for a specific rating.
+ *
+ * Formula: S_new = S_old × r_factor, then I_next = -S_new × ln(0.9)
+ * 
+ * Rating factors:
+ * - Again: 0.30
+ * - Hard:  1.20
+ * - Good:  2.00
+ * - Easy:  3.50
  *
  * @param array      $fsrs_state Current FSRS state
  * @param int        $rating     Rating (1-4)
@@ -1091,27 +997,29 @@ function dnd_vocab_predict_review_intervals( $card, $now ) {
  * @return float Interval in days
  */
 function dnd_vocab_calculate_fsrs_interval( $fsrs_state, $rating, $now, $card = null ) {
-	// If FSRS functions not available, use simple calculation
+	// If FSRS functions not available, use simple calculation with spec rating factors
 	if ( ! function_exists( 'fsrs_create_review_event' ) || ! function_exists( 'fsrs_plusplus_review' ) ) {
 		$stability = $fsrs_state['stability'];
-		$difficulty = $fsrs_state['difficulty'];
 
-		// Apply simple stability multiplier
+		// Apply rating factor (r_factor) per spec
 		if ( $rating === 1 ) {
-			$new_stability = $stability * 0.5;
+			$r_factor = 0.30;  // Again
 		} elseif ( $rating === 2 ) {
-			$new_stability = $stability * 1.0;
+			$r_factor = 1.20;  // Hard
 		} elseif ( $rating === 3 ) {
-			$new_stability = $stability * 1.8;
+			$r_factor = 2.00;  // Good
 		} else {
-			$new_stability = $stability * 2.5;
+			$r_factor = 3.50;  // Easy
 		}
 
-		// Apply difficulty scaling
-		$new_stability *= ( 11.0 - $difficulty ) / 10.0;
+		// S_new = S_old × r_factor
+		$new_stability = $stability * $r_factor;
 
-		// Calculate interval
-		return max( 1.0, -$new_stability * log( 0.9 ) );
+		// I_next = -S_new × ln(0.9), allow sub-day intervals
+		$interval = -$new_stability * log( 0.9 );
+		
+		// Minimum 1 minute (1/1440 days)
+		return max( 0.000694, $interval );
 	}
 
 	// Calculate elapsed days

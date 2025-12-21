@@ -25,16 +25,17 @@ if ( ! defined( 'ABSPATH' ) ) {
    ========================================================================== */
 
 /**
- * Create initial CardState with safe defaults.
+ * Create initial CardState with FSRS-style defaults.
  * 
  * CardState represents the memory state for a specific (user × card) pair.
+ * Initial values: S₀ = 0.20 days, D₀ = 5.0
  * 
  * @return array CardState with default values
  */
 function fsrs_create_initial_card_state() {
     return array(
-        'stability'         => 1.0,   // S: how long the memory lasts (days)
-        'difficulty'        => 5.0,   // D: scale 1 (easy) → 10 (hard)
+        'stability'         => 0.20,  // S₀: initial stability (days)
+        'difficulty'        => 5.0,   // D₀: scale 1 (easy) → 10 (hard)
         'last_review_time'  => 0,     // timestamp (ms or seconds)
         'lapse_count'       => 0,     // total number of lapses
         'consecutive_fails' => 0,     // current streak of failures
@@ -148,44 +149,42 @@ function fsrs_update_difficulty( $state, $event ) {
    ========================================================================== */
 
 /**
- * Update stability using base FSRS logic.
+ * Update stability using FSRS-style logic.
  * 
- * Rules:
- * - rating === 1 (Again): multiplier = 0.5
- * - rating === 2 (Hard):  multiplier = 1.0
- * - rating === 3 (Good):  multiplier = 1.8
- * - rating === 4 (Easy):  multiplier = 2.5
- * - Apply difficulty scaling: (11 - difficulty) / 10
+ * Rating factors (r_factor):
+ * - rating === 1 (Again): 0.30 - forgot, reduce stability significantly
+ * - rating === 2 (Hard):  1.20 - remembered but weak
+ * - rating === 3 (Good):  2.00 - remembered as expected
+ * - rating === 4 (Easy):  3.50 - very easy, increase stability a lot
+ * 
+ * Formula: S_new = S_old × r_factor
  * 
  * @param array $state          CardState
  * @param array $event          ReviewEvent
- * @param float $new_difficulty Updated difficulty value
+ * @param float $new_difficulty Updated difficulty value (unused in simplified formula)
  * @return float Updated stability
  */
 function fsrs_update_stability_base( $state, $event, $new_difficulty ) {
     $stability = $state['stability'];
     $rating    = $event['rating'];
 
-    // Determine base multiplier based on rating
+    // Determine rating factor (r_factor) based on rating
     if ( $rating === 1 ) {
-        // Again - reset stability significantly
-        $stability_multiplier = 0.5;
+        // Again - forgot, reduce stability significantly
+        $r_factor = 0.30;
     } elseif ( $rating === 2 ) {
-        // Hard - small stability increase
-        $stability_multiplier = 1.0;
+        // Hard - remembered but weak
+        $r_factor = 1.20;
     } elseif ( $rating === 3 ) {
-        // Good - good stability increase
-        $stability_multiplier = 1.8;
+        // Good - remembered as expected
+        $r_factor = 2.00;
     } else {
-        // rating === 4 (Easy) - large stability increase
-        $stability_multiplier = 2.5;
+        // rating === 4 (Easy) - very easy
+        $r_factor = 3.50;
     }
 
-    // Apply rating multiplier
-    $stability *= $stability_multiplier;
-
-    // Apply difficulty scaling: easier cards grow stability faster
-    $stability *= ( 11.0 - $new_difficulty ) / 10.0;
+    // Apply rating factor: S_new = S_old × r_factor
+    $stability *= $r_factor;
 
     return $stability;
 }
@@ -200,20 +199,23 @@ function fsrs_update_stability_base( $state, $event, $new_difficulty ) {
  * Formula: next_interval_days = -stability * ln(target_retention)
  * 
  * We schedule the next review when retrievability drops to target_retention.
+ * Note: ln(0.9) ≈ -0.10536, so I_next ≈ stability × 0.10536
  * 
  * @param float $stability        Current stability value
  * @param float $target_retention Target retention probability (default 0.9)
  * @param float $max_interval     Maximum interval in days (default 3650 = ~10 years)
- * @return float Next interval in days, clamped to [1, max_interval]
+ * @param float $min_interval     Minimum interval in days (default 1/1440 = ~1 minute)
+ * @return float Next interval in days, clamped to [min_interval, max_interval]
  */
-function fsrs_compute_next_interval_days( $stability, $target_retention = 0.9, $max_interval = 3650.0 ) {
+function fsrs_compute_next_interval_days( $stability, $target_retention = 0.9, $max_interval = 3650.0, $min_interval = 0.000694 ) {
     // Solve for t when R = target_retention:
     // target_retention = exp(-t / stability)
     // ln(target_retention) = -t / stability
     // t = -stability * ln(target_retention)
     $next_interval_days = -$stability * log( $target_retention );
 
-    return fsrs_clamp( $next_interval_days, 1.0, $max_interval );
+    // Allow sub-day intervals for early reviews (minimum ~1 minute = 1/1440 days)
+    return fsrs_clamp( $next_interval_days, $min_interval, $max_interval );
 }
 
 /**
