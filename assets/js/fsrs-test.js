@@ -4,7 +4,6 @@
 	var FSRSTest = {
 		init: function() {
 			this.bindEvents();
-			this.updateTimeDisplay();
 		},
 
 		bindEvents: function() {
@@ -22,20 +21,6 @@
 				if (confirm(dndVocabFsrsTest.i18n.confirmReset || 'Are you sure you want to reset? This will clear all review history.')) {
 					self.resetTest();
 				}
-			});
-
-			// Time simulation controls
-			$('#dnd-vocab-fsrs-test-set-time').on('click', function() {
-				self.setSimulatedTime();
-			});
-
-			$('.add-days-btn').on('click', function() {
-				var days = parseFloat($(this).data('days'));
-				self.addDaysToSimulatedTime(days);
-			});
-
-			$('#dnd-vocab-fsrs-test-reset-time').on('click', function() {
-				self.resetSimulatedTime();
 			});
 		},
 
@@ -68,6 +53,8 @@
 								response.data.predicted_intervals_formatted
 							);
 						}
+						// Reload page to reflect the new simulated time (automatically advanced)
+						location.reload();
 					} else {
 						alert(response.data && response.data.message ? response.data.message : (dndVocabFsrsTest.i18n.error || 'An error occurred'));
 					}
@@ -235,150 +222,6 @@
 			});
 		},
 
-		updateTimeDisplay: function() {
-			if (dndVocabFsrsTest.formattedCurrentTime) {
-				$('#dnd-vocab-fsrs-test-current-time-display').text(dndVocabFsrsTest.formattedCurrentTime);
-				
-				// Update badge
-				var $badge = $('#dnd-vocab-fsrs-test-current-time-display').siblings('.simulated-badge, .real-time-badge');
-				if (dndVocabFsrsTest.isSimulated) {
-					if (!$badge.hasClass('simulated-badge')) {
-						$badge.removeClass('real-time-badge').addClass('simulated-badge').text('Simulated');
-					}
-					var $resetContainer = $('#dnd-vocab-fsrs-test-reset-time').closest('.time-reset');
-					if ($resetContainer.length) {
-						$resetContainer.show();
-					}
-				} else {
-					if (!$badge.hasClass('real-time-badge')) {
-						$badge.removeClass('simulated-badge').addClass('real-time-badge').text('Real Time');
-					}
-					var $resetContainer = $('#dnd-vocab-fsrs-test-reset-time').closest('.time-reset');
-					if ($resetContainer.length) {
-						$resetContainer.hide();
-					}
-				}
-			}
-		},
-
-		setSimulatedTime: function() {
-			var self = this;
-			var $input = $('#dnd-vocab-fsrs-test-datetime-input');
-			var datetimeValue = $input.val();
-			
-			if (!datetimeValue) {
-				alert('Please select a date and time.');
-				return;
-			}
-
-			// Convert datetime-local to timestamp
-			var date = new Date(datetimeValue);
-			var timestamp = Math.floor(date.getTime() / 1000);
-
-			$.ajax({
-				url: dndVocabFsrsTest.ajaxUrl,
-				type: 'POST',
-				data: {
-					action: 'dnd_vocab_fsrs_test_set_time',
-					nonce: dndVocabFsrsTest.nonce,
-					simulated_time: timestamp
-				},
-				success: function(response) {
-					if (response.success && response.data) {
-						// Update display
-						dndVocabFsrsTest.formattedCurrentTime = response.data.formatted_time;
-						dndVocabFsrsTest.isSimulated = response.data.is_simulated;
-						dndVocabFsrsTest.currentTime = response.data.current_time;
-						self.updateTimeDisplay();
-						// Reload page to update all calculations
-						location.reload();
-					} else {
-						alert(response.data && response.data.message ? response.data.message : (dndVocabFsrsTest.i18n.error || 'An error occurred'));
-					}
-				},
-				error: function() {
-					alert(dndVocabFsrsTest.i18n.error || 'An error occurred');
-				}
-			});
-		},
-
-		addDaysToSimulatedTime: function(days) {
-			var self = this;
-
-			$.ajax({
-				url: dndVocabFsrsTest.ajaxUrl,
-				type: 'POST',
-				data: {
-					action: 'dnd_vocab_fsrs_test_set_time',
-					nonce: dndVocabFsrsTest.nonce,
-					add_days: days
-				},
-				success: function(response) {
-					if (response.success && response.data) {
-					// Update display
-					dndVocabFsrsTest.formattedCurrentTime = response.data.formatted_time;
-					dndVocabFsrsTest.isSimulated = response.data.is_simulated;
-					dndVocabFsrsTest.currentTime = response.data.current_time;
-					self.updateTimeDisplay();
-					// Update datetime input (convert to local time)
-					var date = new Date(response.data.current_time * 1000);
-					var year = date.getFullYear();
-					var month = String(date.getMonth() + 1).padStart(2, '0');
-					var day = String(date.getDate()).padStart(2, '0');
-					var hours = String(date.getHours()).padStart(2, '0');
-					var minutes = String(date.getMinutes()).padStart(2, '0');
-					var localDateTime = year + '-' + month + '-' + day + 'T' + hours + ':' + minutes;
-					$('#dnd-vocab-fsrs-test-datetime-input').val(localDateTime);
-					// Reload page to update all calculations
-					location.reload();
-					} else {
-						alert(response.data && response.data.message ? response.data.message : (dndVocabFsrsTest.i18n.error || 'An error occurred'));
-					}
-				},
-				error: function() {
-					alert(dndVocabFsrsTest.i18n.error || 'An error occurred');
-				}
-			});
-		},
-
-		resetSimulatedTime: function() {
-			var self = this;
-
-			$.ajax({
-				url: dndVocabFsrsTest.ajaxUrl,
-				type: 'POST',
-				data: {
-					action: 'dnd_vocab_fsrs_test_set_time',
-					nonce: dndVocabFsrsTest.nonce,
-					reset_time: '1'
-				},
-				success: function(response) {
-					if (response.success && response.data) {
-					// Update display
-					dndVocabFsrsTest.formattedCurrentTime = response.data.formatted_time;
-					dndVocabFsrsTest.isSimulated = response.data.is_simulated;
-					dndVocabFsrsTest.currentTime = response.data.current_time;
-					self.updateTimeDisplay();
-					// Update datetime input to real time (convert to local time)
-					var date = new Date(response.data.current_time * 1000);
-					var year = date.getFullYear();
-					var month = String(date.getMonth() + 1).padStart(2, '0');
-					var day = String(date.getDate()).padStart(2, '0');
-					var hours = String(date.getHours()).padStart(2, '0');
-					var minutes = String(date.getMinutes()).padStart(2, '0');
-					var localDateTime = year + '-' + month + '-' + day + 'T' + hours + ':' + minutes;
-					$('#dnd-vocab-fsrs-test-datetime-input').val(localDateTime);
-					// Reload page to update all calculations
-					location.reload();
-					} else {
-						alert(response.data && response.data.message ? response.data.message : (dndVocabFsrsTest.i18n.error || 'An error occurred'));
-					}
-				},
-				error: function() {
-					alert(dndVocabFsrsTest.i18n.error || 'An error occurred');
-				}
-			});
-		}
 	};
 
 	// Initialize when document is ready

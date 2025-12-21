@@ -377,13 +377,6 @@ function dnd_vocab_fsrs_test_page() {
 		}
 	}
 
-	// Get simulated time status
-	$is_simulated = dnd_vocab_fsrs_test_get_simulated_time() !== null;
-	$current_time_display = dnd_vocab_fsrs_test_get_current_time();
-	$formatted_current_time = date_i18n( 'Y-m-d H:i:s', $current_time_display );
-	$real_time = current_time( 'timestamp' );
-	$formatted_real_time = date_i18n( 'Y-m-d H:i:s', $real_time );
-
 	// Localize script
 	wp_localize_script(
 		'dnd-vocab-fsrs-test',
@@ -391,11 +384,6 @@ function dnd_vocab_fsrs_test_page() {
 		array(
 			'ajaxUrl' => admin_url( 'admin-ajax.php' ),
 			'nonce'   => wp_create_nonce( 'dnd_vocab_fsrs_test_ajax' ),
-			'currentTime' => $current_time_display,
-			'formattedCurrentTime' => $formatted_current_time,
-			'isSimulated' => $is_simulated,
-			'realTime' => $real_time,
-			'formattedRealTime' => $formatted_real_time,
 			'i18n'    => array(
 				'loading'      => __( 'Processing...', 'dnd-vocab' ),
 				'error'        => __( 'An error occurred. Please try again.', 'dnd-vocab' ),
@@ -416,54 +404,6 @@ function dnd_vocab_fsrs_test_page() {
 			<button type="button" id="dnd-vocab-fsrs-test-reset" class="button">
 				<?php esc_html_e( 'Reset', 'dnd-vocab' ); ?>
 			</button>
-		</div>
-
-		<div class="dnd-vocab-fsrs-test-time-simulation">
-			<h3><?php esc_html_e( 'Time Simulation', 'dnd-vocab' ); ?></h3>
-			<p class="description">
-				<?php esc_html_e( 'Set a simulated time to test how the algorithm behaves at different review times. By default, the system uses the current real time.', 'dnd-vocab' ); ?>
-			</p>
-			<div class="dnd-vocab-fsrs-test-time-controls">
-				<div class="dnd-vocab-fsrs-test-time-display">
-					<label><?php esc_html_e( 'Current Time:', 'dnd-vocab' ); ?></label>
-					<span id="dnd-vocab-fsrs-test-current-time-display" class="time-value">
-						<?php echo esc_html( $formatted_current_time ); ?>
-					</span>
-					<?php if ( $is_simulated ) : ?>
-						<span class="simulated-badge"><?php esc_html_e( 'Simulated', 'dnd-vocab' ); ?></span>
-					<?php else : ?>
-						<span class="real-time-badge"><?php esc_html_e( 'Real Time', 'dnd-vocab' ); ?></span>
-					<?php endif; ?>
-				</div>
-				<div class="dnd-vocab-fsrs-test-time-inputs">
-					<div class="time-input-group">
-						<label for="dnd-vocab-fsrs-test-datetime-input"><?php esc_html_e( 'Set Date & Time:', 'dnd-vocab' ); ?></label>
-						<input 
-							type="datetime-local" 
-							id="dnd-vocab-fsrs-test-datetime-input" 
-							class="datetime-input"
-							value="<?php echo esc_attr( date( 'Y-m-d\TH:i', $current_time_display ) ); ?>"
-						/>
-						<button type="button" id="dnd-vocab-fsrs-test-set-time" class="button button-primary">
-							<?php esc_html_e( 'Set Time', 'dnd-vocab' ); ?>
-						</button>
-					</div>
-					<div class="time-quick-buttons">
-						<label><?php esc_html_e( 'Quick Add Days:', 'dnd-vocab' ); ?></label>
-						<button type="button" class="button add-days-btn" data-days="1">+1 <?php esc_html_e( 'Day', 'dnd-vocab' ); ?></button>
-						<button type="button" class="button add-days-btn" data-days="2">+2 <?php esc_html_e( 'Days', 'dnd-vocab' ); ?></button>
-						<button type="button" class="button add-days-btn" data-days="7">+7 <?php esc_html_e( 'Days', 'dnd-vocab' ); ?></button>
-						<button type="button" class="button add-days-btn" data-days="30">+30 <?php esc_html_e( 'Days', 'dnd-vocab' ); ?></button>
-					</div>
-					<?php if ( $is_simulated ) : ?>
-						<div class="time-reset">
-							<button type="button" id="dnd-vocab-fsrs-test-reset-time" class="button">
-								<?php esc_html_e( 'Reset to Real Time', 'dnd-vocab' ); ?>
-							</button>
-						</div>
-					<?php endif; ?>
-				</div>
-			</div>
 		</div>
 
 		<div class="dnd-vocab-fsrs-test-metrics">
@@ -655,6 +595,14 @@ function dnd_vocab_ajax_fsrs_test_review() {
 		$retrievability_before = fsrs_compute_retrievability( $elapsed_days, $state['stability'] );
 	}
 
+	// Get predicted interval for the selected rating BEFORE processing review
+	// This is the interval that was shown to the user, which we'll use to advance time
+	$predicted_data_before = dnd_vocab_fsrs_test_predict_intervals( $state, $current_time );
+	$selected_rating_interval_days = 0;
+	if ( isset( $predicted_data_before[ $rating ] ) && isset( $predicted_data_before[ $rating ]['days'] ) ) {
+		$selected_rating_interval_days = $predicted_data_before[ $rating ]['days'];
+	}
+
 	// Get current phase (2-phase system: NEW or REVIEW)
 	$current_phase = dnd_vocab_fsrs_test_get_phase( $state );
 	$new_phase = $current_phase;
@@ -710,6 +658,15 @@ function dnd_vocab_ajax_fsrs_test_review() {
 	// Update state with phase
 	$new_state['phase'] = $new_phase;
 	dnd_vocab_fsrs_test_save_state( $new_state );
+
+	// Automatically advance simulated time by the predicted interval for the selected rating
+	// This is the interval that was shown to the user before the review
+	// This ensures the next test will be at the correct time (e.g., after 10m if Good was selected showing 10m)
+	if ( $selected_rating_interval_days > 0 ) {
+		$interval_seconds = $selected_rating_interval_days * DAY_IN_SECONDS;
+		$new_simulated_time = $current_time + (int) $interval_seconds;
+		dnd_vocab_fsrs_test_set_simulated_time( $new_simulated_time );
+	}
 
 	// Rating labels
 	$rating_labels = array(
@@ -793,6 +750,9 @@ function dnd_vocab_ajax_fsrs_test_reset() {
 
 	dnd_vocab_fsrs_test_reset();
 
+	// Reset simulated time to null (real time) when resetting test
+	dnd_vocab_fsrs_test_reset_simulated_time();
+
 	// Get initial state
 	$initial_state = fsrs_create_initial_card_state();
 	// Add phase field for phase-based interval calculation
@@ -824,7 +784,11 @@ add_action( 'wp_ajax_dnd_vocab_fsrs_test_reset', 'dnd_vocab_ajax_fsrs_test_reset
 
 /**
  * AJAX handler for setting simulated time
+ * 
+ * NOTE: This handler is disabled as time simulation UI has been removed.
+ * Time is now automatically advanced after each review based on the selected rating's interval.
  */
+/*
 function dnd_vocab_ajax_fsrs_test_set_time() {
 	check_ajax_referer( 'dnd_vocab_fsrs_test_ajax', 'nonce' );
 
@@ -874,4 +838,5 @@ function dnd_vocab_ajax_fsrs_test_set_time() {
 	);
 }
 add_action( 'wp_ajax_dnd_vocab_fsrs_test_set_time', 'dnd_vocab_ajax_fsrs_test_set_time' );
+*/
 
