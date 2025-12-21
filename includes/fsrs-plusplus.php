@@ -169,18 +169,23 @@ function fsrs_update_stability_base( $state, $event, $new_difficulty ) {
     $rating    = $event['rating'];
 
     // Determine rating factor (r_factor) based on rating
+    // Adjusted to achieve target intervals: 5m, 30m, 1d, 2d after Good rating with S_initial = 4.75
     if ( $rating === 1 ) {
         // Again - forgot, reduce stability significantly
-        $r_factor = 0.30;
+        // Target: 5 minutes interval
+        $r_factor = 0.0035;
     } elseif ( $rating === 2 ) {
         // Hard - remembered but weak
-        $r_factor = 1.20;
+        // Target: 30 minutes interval
+        $r_factor = 0.0208;
     } elseif ( $rating === 3 ) {
         // Good - remembered as expected
-        $r_factor = 2.00;
+        // Target: 1 day interval (when calculating predicted intervals after Good rating)
+        $r_factor = 1.00;
     } else {
         // rating === 4 (Easy) - very easy
-        $r_factor = 3.50;
+        // Target: 2 days interval
+        $r_factor = 1.9982;
     }
 
     // Apply rating factor: S_new = S_old × r_factor

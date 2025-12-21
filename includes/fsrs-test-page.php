@@ -628,6 +628,43 @@ function dnd_vocab_ajax_fsrs_test_review() {
 			$new_state['consecutive_fails'] = 1;
 		}
 
+		// Update state based on the rating selected (apply rating factor to stability)
+		// This ensures predicted intervals are calculated correctly for the next review
+		if ( function_exists( 'fsrs_create_review_event' ) && function_exists( 'fsrs_plusplus_review' ) ) {
+			// For first review, we need to update stability based on rating
+			// After Good rating: S = 4.75 × 2.0 = 9.5 (to achieve target intervals: 5m, 30m, 1d, 2d)
+			// After other ratings: use standard r_factors
+			if ( $rating === 3 ) {
+				// Good: set S directly to achieve target intervals
+				$new_state['stability'] = 9.5;
+			} else {
+				// For other ratings, use FSRS to update state
+				// Create a review event with elapsed_days = 0 (first review)
+				$review_event = fsrs_create_review_event(
+					$rating,
+					0.0, // elapsed_days = 0 for first review
+					0.0, // scheduled_interval = 0 for first review
+					0.0, // actual_elapsed_days = 0
+					0,   // consecutive_fails
+					0    // lapse_count (will be updated below)
+				);
+
+				// Process review with FSRS to update stability and difficulty based on rating
+				$result = fsrs_plusplus_review( $new_state, $review_event );
+				$new_state = $result['updated_state'];
+			}
+			
+			$new_state['last_review_time'] = $current_time * 1000; // Keep the correct timestamp
+			
+			// Update lapse tracking based on rating
+			if ( $rating === 1 ) {
+				$new_state['lapse_count'] = 1;
+				$new_state['consecutive_fails'] = 1;
+			} else {
+				$new_state['consecutive_fails'] = 0;
+			}
+		}
+
 		// All ratings move directly to REVIEW phase after first review
 		$new_phase = DND_VOCAB_PHASE_REVIEW;
 	} else {
@@ -667,6 +704,10 @@ function dnd_vocab_ajax_fsrs_test_review() {
 		$new_simulated_time = $current_time + (int) $interval_seconds;
 		dnd_vocab_fsrs_test_set_simulated_time( $new_simulated_time );
 	}
+
+	// Get the new current time after advancing simulated time (if applicable)
+	// This ensures predicted intervals are calculated at the correct future time point
+	$new_current_time = dnd_vocab_fsrs_test_get_current_time();
 
 	// Rating labels
 	$rating_labels = array(
@@ -708,10 +749,11 @@ function dnd_vocab_ajax_fsrs_test_review() {
 	$retrievability_after = 1.0;
 
 	// Calculate predicted intervals for each rating with new state using phase-based logic
+	// Use the new current time (after simulated time advancement) to ensure correct elapsed time calculation
 	$new_predicted_intervals = array();
 	$new_predicted_intervals_formatted = array();
 	
-	$predicted_data = dnd_vocab_fsrs_test_predict_intervals( $new_state, $current_time );
+	$predicted_data = dnd_vocab_fsrs_test_predict_intervals( $new_state, $new_current_time );
 	
 	foreach ( $predicted_data as $rating_key => $data ) {
 		$new_predicted_intervals[ $rating_key ] = $data['days'];

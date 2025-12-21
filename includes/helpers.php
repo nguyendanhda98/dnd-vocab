@@ -448,9 +448,10 @@ function dnd_vocab_get_card_phase( $card ) {
  */
 function dnd_vocab_init_fsrs_state_for_review( $rating ) {
 	// All ratings start with the same initial stability and difficulty
-	// S₀ = 0.20 days, D₀ = 5.0 (as per FSRS-style spec)
+	// S₀ = 4.75 days (adjusted to achieve target intervals: 5m, 30m, 1d, 2d after Good rating)
+	// D₀ = 5.0 (as per FSRS-style spec)
 	return array(
-		'stability'         => 0.20,
+		'stability'         => 4.75,
 		'difficulty'        => 5.0,
 		'last_review_time'  => time() * 1000,
 		'lapse_count'       => 0,
@@ -969,12 +970,20 @@ function dnd_vocab_predict_review_intervals( $card, $now ) {
 	// Get FSRS state
 	$fsrs_state = dnd_vocab_fsrs_get_card_state( $card );
 
+	// For prediction, we want to calculate intervals as if reviewing RIGHT NOW
+	// So we temporarily set last_review_time to now to make elapsed_time = 0
+	$original_last_review_time = $fsrs_state['last_review_time'];
+	$fsrs_state['last_review_time'] = $now * 1000; // Set to now (in milliseconds) so elapsed_time = 0
+
 	// Calculate interval for each rating independently
 	for ( $rating = 1; $rating <= 4; $rating++ ) {
 		$interval_days = dnd_vocab_calculate_fsrs_interval( $fsrs_state, $rating, $now, $card );
 		$interval_seconds = $interval_days * DAY_IN_SECONDS;
 		$result[ $rating ] = $now + (int) $interval_seconds;
 	}
+
+	// Restore original last_review_time (though it doesn't matter since we're not modifying the original state)
+	$fsrs_state['last_review_time'] = $original_last_review_time;
 
 	return $result;
 }
@@ -1001,15 +1010,15 @@ function dnd_vocab_calculate_fsrs_interval( $fsrs_state, $rating, $now, $card = 
 	if ( ! function_exists( 'fsrs_create_review_event' ) || ! function_exists( 'fsrs_plusplus_review' ) ) {
 		$stability = $fsrs_state['stability'];
 
-		// Apply rating factor (r_factor) per spec
+		// Apply rating factor (r_factor) - adjusted to achieve target intervals
 		if ( $rating === 1 ) {
-			$r_factor = 0.30;  // Again
+			$r_factor = 0.0035;  // Again - target: 5 minutes
 		} elseif ( $rating === 2 ) {
-			$r_factor = 1.20;  // Hard
+			$r_factor = 0.0208;  // Hard - target: 30 minutes
 		} elseif ( $rating === 3 ) {
-			$r_factor = 2.00;  // Good
+			$r_factor = 1.00;  // Good - target: 1 day (when calculating predicted intervals)
 		} else {
-			$r_factor = 3.50;  // Easy
+			$r_factor = 1.9982;  // Easy - target: 2 days
 		}
 
 		// S_new = S_old × r_factor
