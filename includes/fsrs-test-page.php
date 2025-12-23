@@ -611,84 +611,73 @@ function dnd_vocab_ajax_fsrs_test_review() {
 
 	// Process review based on phase
 	if ( $current_phase === DND_VOCAB_PHASE_NEW ) {
-		// NEW PHASE: Use preset hard-coded intervals, then move to REVIEW
+		// PHASE 1 (NEW): Use preset hard-coded intervals
+		// Only GOOD (rating 3) transitions to Phase 2
 		$intervals = dnd_vocab_get_learning_intervals();
 		$interval_seconds = isset( $intervals[ $rating ] ) ? $intervals[ $rating ] : $intervals[3];
 		$next_interval_days = $interval_seconds / DAY_IN_SECONDS;
 
-		// Initialize FSRS state for REVIEW phase (S₀ = 0.20, D₀ = 5.0)
-		if ( function_exists( 'dnd_vocab_init_fsrs_state_for_review' ) ) {
-			$new_state = dnd_vocab_init_fsrs_state_for_review( $rating );
-			$new_state['last_review_time'] = $current_time * 1000;
+		if ( $rating === 3 ) {
+			// GOOD at 10 minutes → Enter Phase 2 with S = 4.75
+			// This is the ONLY path from Phase 1 to Phase 2
+			$new_state = array(
+				'stability'         => 4.75,  // Fixed entry stability (DO NOT CHANGE)
+				'difficulty'        => 5.0,
+				'last_review_time'  => $current_time * 1000,
+				'lapse_count'       => 0,
+				'consecutive_fails' => 0,
+			);
+			$new_phase = DND_VOCAB_PHASE_REVIEW;
+		} else {
+			// AGAIN, HARD, or EASY → Stay in Phase 1
+			$new_state = array(
+				'stability'         => 0.0,   // No stability in Phase 1
+				'difficulty'        => 5.0,
+				'last_review_time'  => $current_time * 1000,
+				'lapse_count'       => ( $rating === 1 ) ? 1 : 0,
+				'consecutive_fails' => ( $rating === 1 ) ? 1 : 0,
+			);
+			$new_phase = DND_VOCAB_PHASE_NEW;
 		}
-
-		// Track lapse count for Again rating
-		if ( $rating === 1 ) {
-			$new_state['lapse_count'] = 1;
-			$new_state['consecutive_fails'] = 1;
-		}
-
-		// Update state based on the rating selected (apply rating factor to stability)
-		// This ensures predicted intervals are calculated correctly for the next review
-		if ( function_exists( 'fsrs_create_review_event' ) && function_exists( 'fsrs_plusplus_review' ) ) {
-			// For first review, we need to update stability based on rating
-			// After Good rating: S = 4.75 × 2.0 = 9.5 (to achieve target intervals: 5m, 30m, 1d, 2d)
-			// After other ratings: use standard r_factors
-			if ( $rating === 3 ) {
-				// Good: set S directly to achieve target intervals
-				$new_state['stability'] = 9.5;
-			} else {
-				// For other ratings, use FSRS to update state
-				// Create a review event with elapsed_days = 0 (first review)
-				$review_event = fsrs_create_review_event(
-					$rating,
-					0.0, // elapsed_days = 0 for first review
-					0.0, // scheduled_interval = 0 for first review
-					0.0, // actual_elapsed_days = 0
-					0,   // consecutive_fails
-					0    // lapse_count (will be updated below)
-				);
-
-				// Process review with FSRS to update stability and difficulty based on rating
-				$result = fsrs_plusplus_review( $new_state, $review_event );
-				$new_state = $result['updated_state'];
-			}
-			
-			$new_state['last_review_time'] = $current_time * 1000; // Keep the correct timestamp
-			
-			// Update lapse tracking based on rating
-			if ( $rating === 1 ) {
-				$new_state['lapse_count'] = 1;
-				$new_state['consecutive_fails'] = 1;
-			} else {
-				$new_state['consecutive_fails'] = 0;
-			}
-		}
-
-		// All ratings move directly to REVIEW phase after first review
-		$new_phase = DND_VOCAB_PHASE_REVIEW;
 	} else {
-		// REVIEW PHASE: Use FSRS calculation
-		// Get scheduled interval
-		$scheduled_interval = 0.0;
-		if ( $state['last_review_time'] > 0 && $state['stability'] > 0 ) {
-			$scheduled_interval = -$state['stability'] * log( 0.9 );
+		// PHASE 2 (REVIEW): Use simplified FSRS formula
+		// S_new = S_old × r_factor
+		// next_interval_days = S_new × 0.10536
+		$base_stability = $state['stability'];
+		if ( $base_stability < 0.1 ) {
+			$base_stability = 0.1;
 		}
 
-		// Create review event
-		$review_event = fsrs_create_review_event(
-			$rating,
-			$elapsed_days,
-			$scheduled_interval,
-			$elapsed_days,
-			$state['consecutive_fails'],
-			$state['lapse_count']
+		// Rating multipliers (r_factor)
+		$r_factors = array(
+			1 => 0.30,  // AGAIN
+			2 => 1.20,  // HARD
+			3 => 2.00,  // GOOD
+			4 => 3.50,  // EASY
 		);
+		$r_factor = isset( $r_factors[ $rating ] ) ? $r_factors[ $rating ] : $r_factors[3];
 
-		// Process review with FSRS
-		$result = fsrs_plusplus_review( $state, $review_event );
-		$new_state = $result['updated_state'];
-		$next_interval_days = $result['next_interval_days'];
+		// Update lapse tracking
+		$new_lapse_count = $state['lapse_count'];
+		$new_consecutive_fails = $state['consecutive_fails'];
+		if ( $rating === 1 ) {
+			$new_lapse_count++;
+			$new_consecutive_fails++;
+		} else {
+			$new_consecutive_fails = 0;
+		}
+
+		// Core formula
+		$new_stability = $base_stability * $r_factor;
+		$next_interval_days = $new_stability * 0.10536;
+
+		$new_state = array(
+			'stability'         => $new_stability,
+			'difficulty'        => $state['difficulty'],
+			'last_review_time'  => $current_time * 1000,
+			'lapse_count'       => $new_lapse_count,
+			'consecutive_fails' => $new_consecutive_fails,
+		);
 		$new_phase = DND_VOCAB_PHASE_REVIEW;
 	}
 

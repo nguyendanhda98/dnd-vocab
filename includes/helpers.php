@@ -438,20 +438,44 @@ function dnd_vocab_get_card_phase( $card ) {
 }
 
 /**
- * Initialize FSRS state when entering review phase.
+ * Initialize FSRS state when entering Phase 2 (REVIEW phase).
  * 
- * Called when card moves from NEW phase to REVIEW phase after first review.
- * Uses fixed initial values: S₀ = 0.20 days, D₀ = 5.0
+ * IMPORTANT: In the main system, Phase 1 → Phase 2 transition ONLY happens
+ * when user presses GOOD at 10 minutes. This function is kept for backward
+ * compatibility with test pages and external integrations.
  * 
- * @param int $rating The rating from the first review (1-4)
- * @return array Initial FSRS CardState
+ * For the canonical transition, use S = 4.75 (rating = 3).
+ * 
+ * Fixed initial stabilities by rating (for legacy/test use):
+ * - AGAIN (1): S = 1.0 days
+ * - HARD (2):  S = 2.5 days
+ * - GOOD (3):  S = 4.75 days ← CANONICAL ENTRY POINT
+ * - EASY (4):  S = 9.5 days
+ * 
+ * After entering Phase 2 with S = 4.75, pressing GOOD produces:
+ * - S_new = 4.75 × 2.0 = 9.5
+ * - I = 9.5 × 0.10536 ≈ 1.0 day
+ * 
+ * @param int $rating           The rating from the first review (1-4)
+ * @param int $interval_seconds Unused, kept for API compatibility
+ * @return array Initial FSRS CardState with fixed stability
  */
-function dnd_vocab_init_fsrs_state_for_review( $rating ) {
-	// All ratings start with the same initial stability and difficulty
-	// S₀ = 4.75 days (adjusted to achieve target intervals: 5m, 30m, 1d, 2d after Good rating)
-	// D₀ = 5.0 (as per FSRS-style spec)
+function dnd_vocab_init_fsrs_state_for_review( $rating, $interval_seconds = 0 ) {
+	// Assign fixed initial stability based on first rating
+	// In the main system, only rating === 3 (GOOD) triggers Phase 2 entry
+	// Other ratings keep card in Phase 1
+	if ( $rating === 1 ) {
+		$initial_stability = 1.0;   // AGAIN (legacy/test only)
+	} elseif ( $rating === 2 ) {
+		$initial_stability = 2.5;   // HARD (legacy/test only)
+	} elseif ( $rating === 3 ) {
+		$initial_stability = 4.75;  // GOOD: canonical Phase 2 entry stability
+	} else {
+		$initial_stability = 9.5;   // EASY (legacy/test only)
+	}
+	
 	return array(
-		'stability'         => 4.75,
+		'stability'         => $initial_stability,
 		'difficulty'        => 5.0,
 		'last_review_time'  => time() * 1000,
 		'lapse_count'       => 0,
@@ -649,16 +673,20 @@ function dnd_vocab_srs_apply_answer( $user_id, $vocab_id, $deck_id, $rating ) {
 }
 
 /**
- * Apply learning phase logic (NEW/LEARNING).
+ * Apply learning phase logic (Phase 1).
  *
- * Phase 1 (NEW): Uses preset hard-coded intervals for first review only.
- * After ANY rating, card moves directly to Phase 2 (REVIEW) with initial FSRS state.
+ * Phase 1 uses fixed hard-coded intervals. Card stays in Phase 1 until
+ * user presses GOOD at 10 minutes, which transitions to Phase 2.
  * 
- * Intervals:
- * - Again: 1 minute
- * - Hard: 5 minutes
- * - Good: 10 minutes
- * - Easy: 3 days
+ * Intervals (fixed, UX-driven):
+ * - Again (1): 1 minute  → stays in Phase 1
+ * - Hard (2):  5 minutes → stays in Phase 1
+ * - Good (3):  10 minutes → TRANSITIONS TO PHASE 2 with S = 4.75
+ * - Easy (4):  3 days    → stays in Phase 1
+ *
+ * Entry condition into Phase 2:
+ * - ONLY when user presses GOOD (rating 3) at 10 minutes
+ * - Initial stability S = 4.75 days (ensures first GOOD in Phase 2 ≈ 1 day)
  *
  * @param array|null $card    Existing card or null
  * @param int        $deck_id Deck ID
@@ -671,17 +699,33 @@ function dnd_vocab_apply_learning_phase( $card, $deck_id, $rating, $now ) {
     $interval_seconds = isset( $intervals[ $rating ] ) ? $intervals[ $rating ] : $intervals[3];
     $due_time = $now + $interval_seconds;
 
-    // Initialize FSRS state for REVIEW phase (S₀ = 0.20, D₀ = 5.0)
-    $fsrs_state = dnd_vocab_init_fsrs_state_for_review( $rating );
-
-    // Track lapse count for Again rating
-    if ( $rating === 1 ) {
-        $fsrs_state['lapse_count'] = 1;
-        $fsrs_state['consecutive_fails'] = 1;
+    // GOOD (rating 3) at 10 minutes → Enter Phase 2 with S = 4.75
+    // This is the ONLY path from Phase 1 to Phase 2
+    if ( $rating === 3 ) {
+        // Initialize Phase 2 with fixed entry stability
+        // S = 4.75 ensures first GOOD in Phase 2 produces ≈1 day interval:
+        // S_new = 4.75 × 2.0 = 9.5, I = 9.5 × 0.10536 ≈ 1.0 day
+        $fsrs_state = array(
+            'stability'         => 4.75,  // Fixed entry stability (DO NOT CHANGE)
+            'difficulty'        => 5.0,   // Default difficulty
+            'last_review_time'  => $now * 1000,
+            'lapse_count'       => 0,
+            'consecutive_fails' => 0,
+        );
+        return dnd_vocab_fsrs_save_card_state( $fsrs_state, $deck_id, $due_time, DND_VOCAB_PHASE_REVIEW );
     }
 
-    // All ratings move directly to REVIEW phase after first review
-    return dnd_vocab_fsrs_save_card_state( $fsrs_state, $deck_id, $due_time, DND_VOCAB_PHASE_REVIEW );
+    // AGAIN, HARD, or EASY → Stay in Phase 1 with fixed interval
+    // Card remains in NEW phase, will show fixed intervals on next review
+    // No FSRS state needed for Phase 1
+    $phase1_state = array(
+        'stability'         => 0.0,   // No stability in Phase 1
+        'difficulty'        => 5.0,   // Default
+        'last_review_time'  => $now * 1000,
+        'lapse_count'       => ( $rating === 1 ) ? 1 : 0,
+        'consecutive_fails' => ( $rating === 1 ) ? 1 : 0,
+    );
+    return dnd_vocab_fsrs_save_card_state( $phase1_state, $deck_id, $due_time, DND_VOCAB_PHASE_NEW );
 }
 
 /**
@@ -703,9 +747,20 @@ function dnd_vocab_apply_transition_phase( $card, $deck_id, $rating, $now ) {
 }
 
 /**
- * Apply review phase logic using FSRS.
+ * Apply review phase logic (Phase 2) using simplified FSRS formula.
  *
- * Uses FSRS algorithm. On Again, enters relearning (short interval).
+ * Phase 2 uses FSRS-style probabilistic scheduling:
+ * - S_new = S_old × r_factor
+ * - next_interval_days = S_new × 0.10536 (where 0.10536 ≈ -ln(0.9))
+ *
+ * Rating multipliers (r_factor):
+ * - AGAIN (1): 0.30 - forgot, reduce stability significantly
+ * - HARD (2):  1.20 - remembered but weak
+ * - GOOD (3):  2.00 - remembered as expected (most common action)
+ * - EASY (4):  3.50 - very easy, increase stability a lot
+ *
+ * IMPORTANT: AGAIN does NOT reset card to Phase 1. It reduces stability
+ * and schedules next review within a few hours (soft correction).
  *
  * @param array|null $card    Existing card
  * @param int        $deck_id Deck ID
@@ -717,94 +772,58 @@ function dnd_vocab_apply_review_phase( $card, $deck_id, $rating, $now ) {
     // Get existing FSRS state
     $fsrs_state = dnd_vocab_fsrs_get_card_state( $card );
 
-    // Handle Again (lapse) - use relearning interval
+    // Get current stability
+    $base_stability = $fsrs_state['stability'];
+    
+    // Ensure minimum stability of 0.1 days to prevent zero intervals
+    if ( $base_stability < 0.1 ) {
+        $base_stability = 0.1;
+    }
+
+    // Rating multipliers (r_factor) - DO NOT CHANGE these values
+    // These are the core of the FSRS-style algorithm
+    $r_factors = array(
+        1 => 0.30,  // AGAIN: reduce stability (soft correction, NOT Phase 1 reset)
+        2 => 1.20,  // HARD: slight increase
+        3 => 2.00,  // GOOD: double stability (primary action)
+        4 => 3.50,  // EASY: large increase
+    );
+    $r_factor = isset( $r_factors[ $rating ] ) ? $r_factors[ $rating ] : $r_factors[3];
+
+    // Update lapse tracking based on rating
+    $new_lapse_count = $fsrs_state['lapse_count'];
+    $new_consecutive_fails = $fsrs_state['consecutive_fails'];
     if ( $rating === 1 ) {
-        // Relearning: 5-10 minute interval
-        $relearn_seconds = 5 * MINUTE_IN_SECONDS;
-        $due_time = $now + $relearn_seconds;
-        
-        // Update FSRS state for lapse
-        $new_lapse_count = $fsrs_state['lapse_count'] + 1;
-        $new_consecutive_fails = $fsrs_state['consecutive_fails'] + 1;
-        
-        // Reduce stability on lapse (multiply by 0.5)
-        $new_stability = max( 0.5, $fsrs_state['stability'] * 0.5 );
-        // Increase difficulty on lapse
-        $new_difficulty = min( 10.0, $fsrs_state['difficulty'] + 0.6 );
-        
-        $updated_state = array(
-            'stability'         => $new_stability,
-            'difficulty'        => $new_difficulty,
-            'last_review_time'  => $now * 1000,
-            'lapse_count'       => $new_lapse_count,
-            'consecutive_fails' => $new_consecutive_fails,
-        );
-        
-        return dnd_vocab_fsrs_save_card_state( $updated_state, $deck_id, $due_time, DND_VOCAB_PHASE_REVIEW );
-    }
-
-    // For Hard/Good/Easy, use FSRS
-    if ( ! function_exists( 'fsrs_create_review_event' ) || ! function_exists( 'fsrs_plusplus_review' ) ) {
-        // Fallback if FSRS functions not available
-        $base_stability = $fsrs_state['stability'];
-        if ( $rating === 2 ) {
-            $new_stability = $base_stability * 1.0;
-        } elseif ( $rating === 3 ) {
-            $new_stability = $base_stability * 1.8;
-        } else {
-            $new_stability = $base_stability * 2.5;
-        }
-        
-        $interval_days = max( 1.0, -$new_stability * log( 0.9 ) );
-        $due_time = $now + (int) ( $interval_days * DAY_IN_SECONDS );
-        
-        $updated_state = array(
-            'stability'         => $new_stability,
-            'difficulty'        => $fsrs_state['difficulty'],
-            'last_review_time'  => $now * 1000,
-            'lapse_count'       => $fsrs_state['lapse_count'],
-            'consecutive_fails' => 0,
-        );
-        
-        return dnd_vocab_fsrs_save_card_state( $updated_state, $deck_id, $due_time, DND_VOCAB_PHASE_REVIEW );
-    }
-
-    // Calculate elapsed days
-    $last_review_time = $fsrs_state['last_review_time'];
-    if ( $last_review_time > 1e12 ) {
-        $last_review_seconds = $last_review_time / 1000;
+        // AGAIN - user forgot, increment both counters
+        $new_lapse_count++;
+        $new_consecutive_fails++;
     } else {
-        $last_review_seconds = $last_review_time;
-    }
-    $elapsed_seconds = $now - $last_review_seconds;
-    $elapsed_days = max( 0.0, $elapsed_seconds / DAY_IN_SECONDS );
-
-    // Get scheduled interval
-    $scheduled_interval = 0.0;
-    if ( is_array( $card ) && isset( $card['interval'] ) && $card['interval'] > 0 ) {
-        $scheduled_interval = (float) $card['interval'];
-    } elseif ( $fsrs_state['stability'] > 0 ) {
-        $scheduled_interval = -$fsrs_state['stability'] * log( 0.9 );
+        // HARD, GOOD, or EASY - user remembered, reset consecutive fails
+        $new_consecutive_fails = 0;
     }
 
-    // Create review event (simplified)
-    $review_event = fsrs_create_review_event(
-        $rating,
-        $elapsed_days,
-        $scheduled_interval,
-        $elapsed_days,
-        $fsrs_state['consecutive_fails'],
-        $fsrs_state['lapse_count']
+    // Core FSRS formula:
+    // S_new = S_old × r_factor
+    $new_stability = $base_stability * $r_factor;
+
+    // next_interval_days = S_new × 0.10536
+    // Note: 0.10536 ≈ -ln(0.9), derived from target retention ρ = 0.9
+    // This schedules next review when retrievability drops to 90%
+    $interval_days = $new_stability * 0.10536;
+
+    // Convert to due timestamp
+    $due_time = $now + (int) ( $interval_days * DAY_IN_SECONDS );
+
+    // Build updated state
+    $updated_state = array(
+        'stability'         => $new_stability,
+        'difficulty'        => $fsrs_state['difficulty'],
+        'last_review_time'  => $now * 1000,
+        'lapse_count'       => $new_lapse_count,
+        'consecutive_fails' => $new_consecutive_fails,
     );
 
-    // Process with FSRS
-    $result = fsrs_plusplus_review( $fsrs_state, $review_event );
-
-    // Get results
-    $next_review_time = isset( $result['next_review_time'] ) ? (int) $result['next_review_time'] : $now + DAY_IN_SECONDS;
-    $updated_state = isset( $result['updated_state'] ) ? $result['updated_state'] : $fsrs_state;
-
-    return dnd_vocab_fsrs_save_card_state( $updated_state, $deck_id, $next_review_time, DND_VOCAB_PHASE_REVIEW );
+    return dnd_vocab_fsrs_save_card_state( $updated_state, $deck_id, $due_time, DND_VOCAB_PHASE_REVIEW );
 }
 
 /**
@@ -946,19 +965,19 @@ function dnd_vocab_predict_transition_intervals( $now ) {
 }
 
 /**
- * Predict intervals for REVIEW phase using FSRS.
+ * Predict intervals for REVIEW phase (Phase 2) using simplified FSRS formula.
  *
- * Phase 2 (REVIEW): Calculate each rating independently using FSRS formula.
+ * Calculates next review timestamps for each rating option.
  * 
- * Formula for each rating:
+ * Formula (same as dnd_vocab_apply_review_phase):
  * - S_new = S_old × r_factor
- * - I_next = -S_new × ln(0.9)
+ * - next_interval_days = S_new × 0.10536
  * 
- * Rating factors (r_factor):
- * - Again: 0.30
- * - Hard:  1.20
- * - Good:  2.00
- * - Easy:  3.50
+ * Rating multipliers (r_factor):
+ * - AGAIN (1): 0.30
+ * - HARD (2):  1.20
+ * - GOOD (3):  2.00
+ * - EASY (4):  3.50
  *
  * @param array|null $card Existing card
  * @param int        $now  Current timestamp
@@ -970,105 +989,63 @@ function dnd_vocab_predict_review_intervals( $card, $now ) {
 	// Get FSRS state
 	$fsrs_state = dnd_vocab_fsrs_get_card_state( $card );
 
-	// For prediction, we want to calculate intervals as if reviewing RIGHT NOW
-	// So we temporarily set last_review_time to now to make elapsed_time = 0
-	$original_last_review_time = $fsrs_state['last_review_time'];
-	$fsrs_state['last_review_time'] = $now * 1000; // Set to now (in milliseconds) so elapsed_time = 0
-
 	// Calculate interval for each rating independently
 	for ( $rating = 1; $rating <= 4; $rating++ ) {
-		$interval_days = dnd_vocab_calculate_fsrs_interval( $fsrs_state, $rating, $now, $card );
+		$interval_days = dnd_vocab_calculate_fsrs_interval( $fsrs_state, $rating );
 		$interval_seconds = $interval_days * DAY_IN_SECONDS;
 		$result[ $rating ] = $now + (int) $interval_seconds;
 	}
-
-	// Restore original last_review_time (though it doesn't matter since we're not modifying the original state)
-	$fsrs_state['last_review_time'] = $original_last_review_time;
 
 	return $result;
 }
 
 /**
- * Calculate FSRS interval for a specific rating.
+ * Calculate FSRS interval for a specific rating (Phase 2).
  *
- * Formula: S_new = S_old × r_factor, then I_next = -S_new × ln(0.9)
+ * Pure function that computes next interval based on current stability and rating.
+ * This is the single source of truth for interval calculation.
  * 
- * Rating factors:
- * - Again: 0.30
- * - Hard:  1.20
- * - Good:  2.00
- * - Easy:  3.50
+ * Formula:
+ * - S_new = S_old × r_factor
+ * - next_interval_days = S_new × 0.10536 (where 0.10536 ≈ -ln(0.9))
+ * 
+ * Rating multipliers (r_factor) - DO NOT CHANGE:
+ * - AGAIN (1): 0.30
+ * - HARD (2):  1.20
+ * - GOOD (3):  2.00
+ * - EASY (4):  3.50
  *
- * @param array      $fsrs_state Current FSRS state
- * @param int        $rating     Rating (1-4)
- * @param int        $now        Current timestamp
- * @param array|null $card       Full card data (for scheduled interval)
+ * @param array $fsrs_state Current FSRS state (must have 'stability' key)
+ * @param int   $rating     Rating (1-4)
  * @return float Interval in days
  */
-function dnd_vocab_calculate_fsrs_interval( $fsrs_state, $rating, $now, $card = null ) {
-	// If FSRS functions not available, use simple calculation with spec rating factors
-	if ( ! function_exists( 'fsrs_create_review_event' ) || ! function_exists( 'fsrs_plusplus_review' ) ) {
-		$stability = $fsrs_state['stability'];
+function dnd_vocab_calculate_fsrs_interval( $fsrs_state, $rating ) {
+	// Get current stability
+	$stability = isset( $fsrs_state['stability'] ) ? (float) $fsrs_state['stability'] : 1.0;
 
-		// Apply rating factor (r_factor) - adjusted to achieve target intervals
-		if ( $rating === 1 ) {
-			$r_factor = 0.0035;  // Again - target: 5 minutes
-		} elseif ( $rating === 2 ) {
-			$r_factor = 0.0208;  // Hard - target: 30 minutes
-		} elseif ( $rating === 3 ) {
-			$r_factor = 1.00;  // Good - target: 1 day (when calculating predicted intervals)
-		} else {
-			$r_factor = 1.9982;  // Easy - target: 2 days
-		}
-
-		// S_new = S_old × r_factor
-		$new_stability = $stability * $r_factor;
-
-		// I_next = -S_new × ln(0.9), allow sub-day intervals
-		$interval = -$new_stability * log( 0.9 );
-		
-		// Minimum 1 minute (1/1440 days)
-		return max( 0.000694, $interval );
+	// Ensure minimum stability of 0.1 days to prevent zero intervals
+	if ( $stability < 0.1 ) {
+		$stability = 0.1;
 	}
 
-	// Calculate elapsed days
-	$last_review_time = $fsrs_state['last_review_time'];
-	if ( $last_review_time > 1e12 ) {
-		$last_review_seconds = $last_review_time / 1000;
-	} else {
-		$last_review_seconds = $last_review_time;
-	}
-	$elapsed_seconds = $now - $last_review_seconds;
-	$elapsed_days = max( 0.0, $elapsed_seconds / DAY_IN_SECONDS );
-
-	// Get scheduled interval
-	$scheduled_interval = 0.0;
-	if ( is_array( $card ) && isset( $card['interval'] ) && $card['interval'] > 0 ) {
-		$scheduled_interval = (float) $card['interval'];
-	} elseif ( $fsrs_state['stability'] > 0 ) {
-		$scheduled_interval = -$fsrs_state['stability'] * log( 0.9 );
-	}
-
-	// Create review event
-	$review_event = fsrs_create_review_event(
-		$rating,
-		$elapsed_days,
-		$scheduled_interval,
-		$elapsed_days,
-		$fsrs_state['consecutive_fails'],
-		$fsrs_state['lapse_count']
+	// Rating multipliers (r_factor) - these are the core of the algorithm
+	$r_factors = array(
+		1 => 0.30,  // AGAIN: reduce stability significantly
+		2 => 1.20,  // HARD: slight increase
+		3 => 2.00,  // GOOD: double stability
+		4 => 3.50,  // EASY: large increase
 	);
+	$r_factor = isset( $r_factors[ $rating ] ) ? $r_factors[ $rating ] : $r_factors[3];
 
-	// Process with FSRS
-	$fsrs_result = fsrs_plusplus_review( $fsrs_state, $review_event );
+	// S_new = S_old × r_factor
+	$new_stability = $stability * $r_factor;
 
-	// Return interval in days
-	if ( isset( $fsrs_result['next_interval_days'] ) ) {
-		return (float) $fsrs_result['next_interval_days'];
-	}
+	// next_interval_days = S_new × 0.10536
+	// Note: 0.10536 ≈ -ln(0.9), derived from target retention ρ = 0.9
+	$interval_days = $new_stability * 0.10536;
 
-	// Fallback
-	return 1.0;
+	// Minimum 1 minute (1/1440 ≈ 0.000694 days) to prevent zero intervals
+	return max( 0.000694, $interval_days );
 }
 
 /**
