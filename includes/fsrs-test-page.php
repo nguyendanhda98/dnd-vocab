@@ -720,6 +720,7 @@ function dnd_vocab_ajax_fsrs_test_review() {
 	// Add to history
 	$history_entry = array(
 		'timestamp'          => $current_time,
+		'timestamp_formatted' => date_i18n( 'Y-m-d H:i:s', $current_time ),
 		'rating'             => $rating,
 		'rating_label'       => $rating_labels[ $rating ],
 		'rating_name'        => $rating_names[ $rating ],

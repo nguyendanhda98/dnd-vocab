@@ -161,17 +161,20 @@
 				$logBody = $('#dnd-vocab-fsrs-test-log-body');
 			}
 
-			// Format timestamp
-			var timestamp = new Date(entry.timestamp * 1000);
-			var timestampStr = timestamp.toLocaleString('en-US', {
-				year: 'numeric',
-				month: '2-digit',
-				day: '2-digit',
-				hour: '2-digit',
-				minute: '2-digit',
-				second: '2-digit',
-				hour12: false
-			});
+			// Format timestamp - use pre-formatted from PHP if available, otherwise format in JavaScript
+			var timestampStr = entry.timestamp_formatted;
+			if (!timestampStr && entry.timestamp) {
+				var timestamp = new Date(entry.timestamp * 1000);
+				timestampStr = timestamp.toLocaleString('en-US', {
+					year: 'numeric',
+					month: '2-digit',
+					day: '2-digit',
+					hour: '2-digit',
+					minute: '2-digit',
+					second: '2-digit',
+					hour12: false
+				});
+			}
 
 			// Create row (newest at top, so this is review #reviewNumber)
 			var rowHtml = '<tr class="log-entry-new">' +
